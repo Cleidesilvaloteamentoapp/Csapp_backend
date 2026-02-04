@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     WHATSAPP_API_KEY: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     
-    # JWT (reference from Supabase)
-    JWT_SECRET: str = ""
+    # JWT Settings
+    # Note: JWT is managed by Supabase Auth - no custom JWT secret needed
+    # JWT_SECRET: str = ""  # NOT USED - Supabase handles JWT internally
     
     @property
     def cors_origins_list(self) -> List[str]:
