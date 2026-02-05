@@ -1,0 +1,49 @@
+"""Celery application configuration."""
+
+from celery import Celery
+from celery.schedules import crontab
+
+from app.core.config import settings
+
+celery = Celery(
+    "csapp",
+    broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
+    include=[
+        "app.tasks.invoice_tasks",
+        "app.tasks.notification_tasks",
+    ],
+)
+
+celery.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="America/Sao_Paulo",
+    enable_utc=True,
+    task_track_started=True,
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    task_default_retry_delay=60,
+    task_max_retries=3,
+)
+
+# Beat schedule – periodic tasks
+celery.conf.beat_schedule = {
+    "check-overdue-invoices-daily": {
+        "task": "app.tasks.invoice_tasks.check_overdue_invoices",
+        "schedule": crontab(hour=6, minute=0),  # 06:00 daily
+    },
+    "generate-monthly-invoices": {
+        "task": "app.tasks.invoice_tasks.generate_monthly_invoices",
+        "schedule": crontab(day_of_month=1, hour=3, minute=0),  # 1st of month, 03:00
+    },
+    "send-payment-reminders": {
+        "task": "app.tasks.notification_tasks.send_payment_reminders",
+        "schedule": crontab(hour=9, minute=0),  # 09:00 daily
+    },
+    "sync-payment-status": {
+        "task": "app.tasks.invoice_tasks.sync_payment_status",
+        "schedule": crontab(hour="*/4", minute=30),  # Every 4 hours
+    },
+}

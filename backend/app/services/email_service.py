@@ -1,0 +1,118 @@
+"""Email notification service using Resend."""
+
+import resend
+
+from app.core.config import settings
+from app.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def _init_resend() -> None:
+    """Configure the Resend SDK."""
+    resend.api_key = settings.RESEND_API_KEY
+
+
+async def send_email(
+    to: str | list[str],
+    subject: str,
+    html: str,
+    from_email: str | None = None,
+    from_name: str | None = None,
+) -> dict | None:
+    """Send an email via Resend.  Returns the API response dict or None on failure."""
+    _init_resend()
+    sender = f"{from_name or settings.SMTP_FROM_NAME} <{from_email or settings.SMTP_FROM_EMAIL}>"
+
+    try:
+        params = {
+            "from_": sender,
+            "to": to if isinstance(to, list) else [to],
+            "subject": subject,
+            "html": html,
+        }
+        response = resend.Emails.send(params)
+        logger.info("email_sent", to=to, subject=subject)
+        return response
+    except Exception as exc:
+        logger.error("email_send_failed", to=to, error=str(exc))
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Template helpers
+# ---------------------------------------------------------------------------
+
+async def send_welcome_email(to: str, client_name: str, company_name: str) -> None:
+    """Send welcome email to a new client."""
+    html = f"""
+    <h2>Bem-vindo(a), {client_name}!</h2>
+    <p>Sua conta foi criada com sucesso na <strong>{company_name}</strong>.</p>
+    <p>Acesse o portal do cliente para visualizar seus lotes, boletos e documentos.</p>
+    """
+    await send_email(to=to, subject=f"Bem-vindo à {company_name}", html=html)
+
+
+async def send_credentials_email(to: str, name: str, temp_password: str) -> None:
+    """Send login credentials to a new client user."""
+    html = f"""
+    <h2>Suas credenciais de acesso</h2>
+    <p>Olá, {name}. Seu acesso ao portal foi criado.</p>
+    <p><strong>Email:</strong> {to}</p>
+    <p><strong>Senha temporária:</strong> {temp_password}</p>
+    <p>Recomendamos que altere sua senha no primeiro acesso.</p>
+    """
+    await send_email(to=to, subject="Suas credenciais de acesso", html=html)
+
+
+async def send_invoice_email(to: str, name: str, due_date: str, amount: str, payment_url: str) -> None:
+    """Notify client that a new boleto is available."""
+    html = f"""
+    <h2>Novo boleto disponível</h2>
+    <p>Olá, {name}. Um novo boleto foi gerado para você.</p>
+    <p><strong>Vencimento:</strong> {due_date}</p>
+    <p><strong>Valor:</strong> R$ {amount}</p>
+    <p><a href="{payment_url}">Clique aqui para pagar</a></p>
+    """
+    await send_email(to=to, subject="Novo boleto disponível", html=html)
+
+
+async def send_payment_reminder(to: str, name: str, due_date: str, amount: str) -> None:
+    """Send payment reminder."""
+    html = f"""
+    <h2>Lembrete de pagamento</h2>
+    <p>Olá, {name}. Lembrete: seu boleto vence em <strong>{due_date}</strong>.</p>
+    <p><strong>Valor:</strong> R$ {amount}</p>
+    """
+    await send_email(to=to, subject="Lembrete de pagamento", html=html)
+
+
+async def send_overdue_alert(to: str, name: str, due_date: str, amount: str) -> None:
+    """Send overdue payment alert."""
+    html = f"""
+    <h2>Alerta de atraso</h2>
+    <p>Olá, {name}. Seu boleto com vencimento em <strong>{due_date}</strong> está em atraso.</p>
+    <p><strong>Valor:</strong> R$ {amount}</p>
+    <p>Por favor, regularize o pagamento o mais breve possível.</p>
+    """
+    await send_email(to=to, subject="Alerta: boleto em atraso", html=html)
+
+
+async def send_rescission_alert(to: str, name: str, overdue_months: int) -> None:
+    """Send rescission warning for long-term default."""
+    html = f"""
+    <h2>Alerta de possível rescisão</h2>
+    <p>Olá, {name}. Identificamos que você está com <strong>{overdue_months} meses</strong> de atraso.</p>
+    <p>Por favor, entre em contato conosco para regularizar sua situação e evitar a rescisão do contrato.</p>
+    """
+    await send_email(to=to, subject="URGENTE: Alerta de rescisão contratual", html=html)
+
+
+async def send_service_order_update(to: str, name: str, order_id: str, new_status: str) -> None:
+    """Notify client about a service order status change."""
+    html = f"""
+    <h2>Atualização de ordem de serviço</h2>
+    <p>Olá, {name}. Sua ordem de serviço <strong>#{order_id[:8]}</strong> foi atualizada.</p>
+    <p><strong>Novo status:</strong> {new_status}</p>
+    """
+    await send_email(to=to, subject="OS atualizada", html=html)
