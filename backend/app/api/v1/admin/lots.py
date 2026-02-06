@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Admin lot and development management endpoints."""
 
 import math
@@ -117,8 +119,8 @@ async def update_development(
 async def list_lots(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
-    development_id: UUID | None = None,
-    status_filter: str | None = Query(None, alias="status"),
+    development_id: Optional[UUID] = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):

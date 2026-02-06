@@ -1,3 +1,4 @@
+
 """Authentication endpoints: signup, login, logout, me, refresh."""
 
 from fastapi import APIRouter, Depends, HTTPException, status

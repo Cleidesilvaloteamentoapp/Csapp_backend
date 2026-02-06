@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Client service order endpoints."""
 
 from datetime import date
@@ -22,7 +24,7 @@ from app.schemas.service import (
 router = APIRouter(prefix="/services", tags=["Client Services"])
 
 
-async def _get_client(db: AsyncSession, user: Profile) -> Client | None:
+async def _get_client(db: AsyncSession, user: Profile) -> Optional[Client]:
     row = await db.execute(
         select(Client).where(Client.profile_id == user.id, Client.company_id == user.company_id)
     )

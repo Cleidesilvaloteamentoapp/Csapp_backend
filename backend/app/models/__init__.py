@@ -1,3 +1,4 @@
+
 """Re-export all models so Alembic and the app can discover them."""
 
 from app.models.audit import AuditLog  # noqa: F401

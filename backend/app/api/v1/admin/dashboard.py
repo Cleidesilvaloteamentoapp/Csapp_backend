@@ -1,3 +1,4 @@
+
 """Admin dashboard endpoints."""
 
 from datetime import datetime, timezone

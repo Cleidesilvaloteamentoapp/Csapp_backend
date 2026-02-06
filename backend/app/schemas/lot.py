@@ -1,8 +1,9 @@
+
 """Lot and Development schemas (Pydantic v2)."""
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Optional, Dict
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,18 +17,18 @@ class DevelopmentCreate(BaseModel):
     """Payload for creating a development."""
 
     name: str = Field(..., min_length=2, max_length=255)
-    description: str | None = None
-    location: str | None = None
-    documents: dict[str, Any] | None = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    documents: Optional[Dict[str, Any]] = None
 
 
 class DevelopmentUpdate(BaseModel):
     """Payload for updating a development."""
 
-    name: str | None = Field(None, min_length=2, max_length=255)
-    description: str | None = None
-    location: str | None = None
-    documents: dict[str, Any] | None = None
+    name: Optional[str] = Field(None, min_length=2, max_length=255)
+    description: Optional[str] = None
+    location: Optional[str] = None
+    documents: Optional[Dict[str, Any]] = None
 
 
 class DevelopmentResponse(BaseModel):
@@ -36,9 +37,9 @@ class DevelopmentResponse(BaseModel):
     id: UUID
     company_id: UUID
     name: str
-    description: str | None = None
-    location: str | None = None
-    documents: dict[str, Any] | None = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    documents: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -54,21 +55,21 @@ class LotCreate(BaseModel):
 
     development_id: UUID
     lot_number: str = Field(..., min_length=1, max_length=50)
-    block: str | None = Field(None, max_length=50)
+    block: Optional[str] = Field(None, max_length=50)
     area_m2: Decimal = Field(..., gt=0)
     price: Decimal = Field(..., gt=0)
-    documents: dict[str, Any] | None = None
+    documents: Optional[Dict[str, Any]] = None
 
 
 class LotUpdate(BaseModel):
     """Payload for updating a lot."""
 
-    lot_number: str | None = Field(None, min_length=1, max_length=50)
-    block: str | None = Field(None, max_length=50)
-    area_m2: Decimal | None = Field(None, gt=0)
-    price: Decimal | None = Field(None, gt=0)
-    status: str | None = Field(None, pattern=r"^(available|reserved|sold)$")
-    documents: dict[str, Any] | None = None
+    lot_number: Optional[str] = Field(None, min_length=1, max_length=50)
+    block: Optional[str] = Field(None, max_length=50)
+    area_m2: Optional[Decimal] = Field(None, gt=0)
+    price: Optional[Decimal] = Field(None, gt=0)
+    status: Optional[str] = Field(None, pattern=r"^(available|reserved|sold)$")
+    documents: Optional[Dict[str, Any]] = None
 
 
 class LotResponse(BaseModel):
@@ -78,11 +79,11 @@ class LotResponse(BaseModel):
     company_id: UUID
     development_id: UUID
     lot_number: str
-    block: str | None = None
+    block: Optional[str] = None
     area_m2: Decimal
     price: Decimal
     status: str
-    documents: dict[str, Any] | None = None
+    documents: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -100,7 +101,7 @@ class LotAssignRequest(BaseModel):
     lot_id: UUID
     purchase_date: date
     total_value: Decimal = Field(..., gt=0)
-    payment_plan: dict[str, Any] | None = Field(
+    payment_plan: Optional[Dict[str, Any]] = Field(
         None,
         description="Installment details, e.g. {'installments': 120, 'first_due': '2024-03-01'}",
     )
@@ -115,7 +116,7 @@ class ClientLotResponse(BaseModel):
     lot_id: UUID
     purchase_date: date
     total_value: Decimal
-    payment_plan: dict[str, Any] | None = None
+    payment_plan: Optional[Dict[str, Any]] = None
     status: str
     created_at: datetime
     updated_at: datetime

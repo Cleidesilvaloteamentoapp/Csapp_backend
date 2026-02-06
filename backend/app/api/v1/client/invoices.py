@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Client invoice (boleto) endpoints."""
 
 from uuid import UUID
@@ -17,7 +19,7 @@ from app.schemas.invoice import InvoiceResponse
 router = APIRouter(prefix="/invoices", tags=["Client Invoices"])
 
 
-async def _get_client(db: AsyncSession, user: Profile) -> Client | None:
+async def _get_client(db: AsyncSession, user: Profile) -> Optional[Client]:
     """Retrieve the Client record linked to the current profile."""
     row = await db.execute(
         select(Client).where(Client.profile_id == user.id, Client.company_id == user.company_id)
@@ -27,7 +29,7 @@ async def _get_client(db: AsyncSession, user: Profile) -> Client | None:
 
 @router.get("/", response_model=list[InvoiceResponse])
 async def list_invoices(
-    lot_id: UUID | None = None,
+    lot_id: Optional[UUID] = None,
     db: AsyncSession = Depends(get_db),
     user: Profile = Depends(get_client_user),
 ):

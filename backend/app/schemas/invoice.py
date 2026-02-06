@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Invoice schemas (Pydantic v2)."""
 
 from datetime import date, datetime
@@ -17,10 +19,10 @@ class InvoiceResponse(BaseModel):
     amount: Decimal
     installment_number: int
     status: str
-    asaas_payment_id: str | None = None
-    barcode: str | None = None
-    payment_url: str | None = None
-    paid_at: datetime | None = None
+    asaas_payment_id: Optional[str] = None
+    barcode: Optional[str] = None
+    payment_url: Optional[str] = None
+    paid_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

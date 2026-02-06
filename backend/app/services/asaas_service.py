@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Asaas payment gateway integration service."""
 
 from datetime import date, timedelta
@@ -30,7 +32,7 @@ async def create_customer(
     name: str,
     cpf_cnpj: str,
     email: str,
-    phone: str | None = None,
+    phone: Optional[str] = None,
 ) -> str:
     """Create a customer in Asaas and return the asaas_customer_id."""
     payload = {

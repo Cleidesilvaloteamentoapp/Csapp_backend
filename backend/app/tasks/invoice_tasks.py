@@ -1,3 +1,4 @@
+
 """Celery tasks for invoice management and Asaas sync."""
 
 import asyncio

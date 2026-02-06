@@ -1,3 +1,4 @@
+
 """Webhook endpoints for external integrations (Asaas)."""
 
 from datetime import datetime, timezone

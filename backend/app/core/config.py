@@ -1,3 +1,4 @@
+
 """Application settings loaded from environment variables."""
 
 import json

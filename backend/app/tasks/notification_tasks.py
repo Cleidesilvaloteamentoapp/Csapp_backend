@@ -1,3 +1,4 @@
+
 """Celery tasks for notifications (email + WhatsApp)."""
 
 import asyncio

@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Profile model – extends Supabase auth.users with app-specific data."""
 
 import uuid
@@ -29,7 +31,7 @@ class Profile(Base, TenantMixin, TimestampMixin):
     cpf_cnpj: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Relationships
     company = relationship("Company", back_populates="profiles", lazy="selectin")

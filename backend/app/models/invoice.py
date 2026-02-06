@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Invoice model – boletos / payment installments."""
 
 import uuid
@@ -33,10 +35,10 @@ class Invoice(Base, TenantMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
-    asaas_payment_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    barcode: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    payment_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    asaas_payment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    barcode: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    payment_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     client_lot = relationship("ClientLot", back_populates="invoices", lazy="selectin")

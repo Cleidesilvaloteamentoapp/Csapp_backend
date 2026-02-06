@@ -1,3 +1,4 @@
+
 """Shared schema helpers: pagination, generic responses."""
 
 from typing import Any, Generic, TypeVar

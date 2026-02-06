@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Email notification service using Resend."""
 
 import resend
@@ -17,9 +19,9 @@ async def send_email(
     to: str | list[str],
     subject: str,
     html: str,
-    from_email: str | None = None,
-    from_name: str | None = None,
-) -> dict | None:
+    from_email: Optional[str] = None,
+    from_name: Optional[str] = None,
+) -> Optional[dict]:
     """Send an email via Resend.  Returns the API response dict or None on failure."""
     _init_resend()
     sender = f"{from_name or settings.SMTP_FROM_NAME} <{from_email or settings.SMTP_FROM_EMAIL}>"

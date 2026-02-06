@@ -1,4 +1,6 @@
+
 """Custom exception classes for the application."""
+from typing import Optional
 
 
 class TenantIsolationError(Exception):
@@ -20,7 +22,7 @@ class InsufficientPermissionsError(Exception):
 class ResourceNotFoundError(Exception):
     """Raised when a requested resource does not exist."""
 
-    def __init__(self, resource: str = "Resource", detail: str | None = None):
+    def __init__(self, resource: str = "Resource", detail: Optional[str] = None):
         self.detail = detail or f"{resource} not found"
         super().__init__(self.detail)
 

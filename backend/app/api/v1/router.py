@@ -1,3 +1,4 @@
+
 """Aggregate all v1 API routers into a single router."""
 
 from fastapi import APIRouter

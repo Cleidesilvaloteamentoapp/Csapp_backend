@@ -1,3 +1,5 @@
+from typing import Optional
+
 """ClientLot model – relationship between a client and a purchased lot."""
 
 import uuid
@@ -29,7 +31,7 @@ class ClientLot(Base, TenantMixin, TimestampMixin):
     )
     purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
     total_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    payment_plan: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    payment_plan: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     status: Mapped[ClientLotStatus] = mapped_column(
         SAEnum(ClientLotStatus, name="client_lot_status", create_constraint=True),
         default=ClientLotStatus.ACTIVE,

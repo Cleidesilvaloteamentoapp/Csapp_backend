@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Multi-tenant context middleware and helpers.
 
 Every request carries a tenant context (company_id) derived from the
@@ -18,9 +20,9 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Context variables accessible anywhere in the async call chain.
-current_company_id: ContextVar[UUID | None] = ContextVar("current_company_id", default=None)
-current_user_id: ContextVar[UUID | None] = ContextVar("current_user_id", default=None)
-current_user_role: ContextVar[str | None] = ContextVar("current_user_role", default=None)
+current_company_id: ContextVar[Optional[UUID]] = ContextVar("current_company_id", default=None)
+current_user_id: ContextVar[Optional[UUID]] = ContextVar("current_user_id", default=None)
+current_user_role: ContextVar[Optional[str]] = ContextVar("current_user_role", default=None)
 
 
 class TenantMiddleware(BaseHTTPMiddleware):

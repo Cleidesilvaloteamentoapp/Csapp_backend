@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Company management endpoints (super_admin only)."""
 
 import math
@@ -28,8 +30,8 @@ router = APIRouter(prefix="/companies", tags=["Companies"])
 async def list_companies(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
-    status_filter: str | None = Query(None, alias="status"),
-    search: str | None = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    search: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     _admin: Profile = Depends(get_super_admin),
 ):

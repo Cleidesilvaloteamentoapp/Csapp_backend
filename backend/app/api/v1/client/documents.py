@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Client document management endpoints."""
 
 from uuid import UUID
@@ -16,7 +18,7 @@ from app.utils.exceptions import StorageError
 router = APIRouter(prefix="/documents", tags=["Client Documents"])
 
 
-async def _get_client(db: AsyncSession, user: Profile) -> Client | None:
+async def _get_client(db: AsyncSession, user: Profile) -> Optional[Client]:
     row = await db.execute(
         select(Client).where(Client.profile_id == user.id, Client.company_id == user.company_id)
     )

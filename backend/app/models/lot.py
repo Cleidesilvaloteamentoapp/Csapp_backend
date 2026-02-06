@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Lot model – individual lots within developments."""
 
 import uuid
@@ -25,7 +27,7 @@ class Lot(Base, TenantMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("developments.id", ondelete="CASCADE"), nullable=False
     )
     lot_number: Mapped[str] = mapped_column(String(50), nullable=False)
-    block: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    block: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     area_m2: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     status: Mapped[LotStatus] = mapped_column(
@@ -34,7 +36,7 @@ class Lot(Base, TenantMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
-    documents: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    documents: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
 
     # Relationships
     development = relationship("Development", back_populates="lots", lazy="selectin")

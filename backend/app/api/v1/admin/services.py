@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Admin service type and service order endpoints."""
 
 import math
@@ -91,8 +93,8 @@ async def update_service_type(
 async def list_orders(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
-    status_filter: str | None = Query(None, alias="status"),
-    client_id: UUID | None = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    client_id: Optional[UUID] = None,
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):

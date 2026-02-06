@@ -1,3 +1,4 @@
+
 """Base model mixin with common columns for all tenant-aware tables."""
 
 import uuid

@@ -1,3 +1,4 @@
+
 """Authentication service – signup, login, token refresh."""
 
 from uuid import UUID

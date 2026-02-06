@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Development model – real-estate developments (loteamentos)."""
 
 import uuid
@@ -19,9 +21,9 @@ class Development(Base, TenantMixin, TimestampMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    location: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    documents: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    location: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    documents: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
 
     # Relationships
     lots = relationship("Lot", back_populates="development", lazy="selectin")

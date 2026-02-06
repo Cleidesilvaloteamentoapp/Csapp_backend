@@ -1,3 +1,4 @@
+
 """Database engine, session factory, and base model for SQLAlchemy 2.0 async."""
 
 from collections.abc import AsyncGenerator

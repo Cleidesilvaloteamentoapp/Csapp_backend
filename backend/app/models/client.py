@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Client model – end-customers of each company."""
 
 import uuid
@@ -20,23 +22,23 @@ class Client(Base, TenantMixin, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    profile_id: Mapped[uuid.UUID | None] = mapped_column(
+    profile_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True
     )
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     cpf_cnpj: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
-    address: Mapped[dict | None] = mapped_column(JSONB, default=dict)
-    documents: Mapped[list | None] = mapped_column(JSONB, default=list)
+    address: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
+    documents: Mapped[Optional[list]] = mapped_column(JSONB, default=list)
     status: Mapped[ClientStatus] = mapped_column(
         SAEnum(ClientStatus, name="client_status", create_constraint=True),
         default=ClientStatus.ACTIVE,
         nullable=False,
         index=True,
     )
-    asaas_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
+    asaas_customer_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True
     )
 

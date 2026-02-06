@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from typing import Optional
 
 import structlog
 
@@ -57,6 +58,6 @@ def setup_logging(debug: bool = False) -> None:
     )
 
 
-def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+def get_logger(name: Optional[str] = None) -> structlog.stdlib.BoundLogger:
     """Return a bound structlog logger."""
     return structlog.get_logger(name)

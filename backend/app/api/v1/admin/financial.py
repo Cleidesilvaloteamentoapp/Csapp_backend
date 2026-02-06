@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Admin financial endpoints."""
 
 import math
@@ -63,7 +65,7 @@ async def financial_summary(
 async def receivables(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
-    status_filter: str | None = Query(None, alias="status"),
+    status_filter: Optional[str] = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):

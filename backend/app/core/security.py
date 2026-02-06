@@ -1,8 +1,10 @@
+
 """JWT token handling (HS256 internal + ES256 Supabase), password hashing, and role checks."""
 
 import json
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Optional
 from uuid import UUID
 
 from jose import JWTError, jwt
@@ -42,9 +44,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(
     user_id: str,
-    company_id: str | None,
+    company_id: Optional[str],
     role: str,
-    expires_delta: timedelta | None = None,
+    expires_delta: Optional[timedelta] = None,
 ) -> str:
     """Create an HS256 access token with user claims."""
     expire = datetime.now(timezone.utc) + (
@@ -63,7 +65,7 @@ def create_access_token(
 
 def create_refresh_token(
     user_id: str,
-    company_id: str | None,
+    company_id: Optional[str],
     role: str,
 ) -> str:
     """Create an HS256 refresh token with extended expiry."""

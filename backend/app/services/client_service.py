@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Client business-logic service."""
 
 import math
@@ -23,8 +25,8 @@ async def list_clients(
     db: AsyncSession,
     company_id: UUID,
     params: PaginationParams,
-    status_filter: str | None = None,
-    search: str | None = None,
+    status_filter: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> PaginatedResponse[ClientResponse]:
     """Paginated list of clients for the current tenant."""
     base = select(Client).where(Client.company_id == company_id)

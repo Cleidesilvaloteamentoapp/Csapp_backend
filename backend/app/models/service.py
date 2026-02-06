@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Service models – service types and service orders."""
 
 import uuid
@@ -22,7 +24,7 @@ class ServiceType(Base, TenantMixin, TimestampMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     base_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -44,14 +46,14 @@ class ServiceOrder(Base, TenantMixin, TimestampMixin):
     client_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False
     )
-    lot_id: Mapped[uuid.UUID | None] = mapped_column(
+    lot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("lots.id", ondelete="SET NULL"), nullable=True
     )
     service_type_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_types.id", ondelete="CASCADE"), nullable=False
     )
     requested_date: Mapped[date] = mapped_column(Date, nullable=False)
-    execution_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    execution_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[ServiceOrderStatus] = mapped_column(
         SAEnum(ServiceOrderStatus, name="service_order_status", create_constraint=True),
         default=ServiceOrderStatus.REQUESTED,
@@ -60,7 +62,7 @@ class ServiceOrder(Base, TenantMixin, TimestampMixin):
     )
     cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     revenue: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     client = relationship("Client", lazy="selectin")

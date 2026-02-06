@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Client referral endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -14,7 +16,7 @@ from app.schemas.referral import ReferralCreate, ReferralResponse
 router = APIRouter(prefix="/referrals", tags=["Client Referrals"])
 
 
-async def _get_client(db: AsyncSession, user: Profile) -> Client | None:
+async def _get_client(db: AsyncSession, user: Profile) -> Optional[Client]:
     row = await db.execute(
         select(Client).where(Client.profile_id == user.id, Client.company_id == user.company_id)
     )

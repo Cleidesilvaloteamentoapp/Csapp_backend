@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Admin client management endpoints."""
 
 from uuid import UUID
@@ -27,8 +29,8 @@ router = APIRouter(prefix="/clients", tags=["Admin Clients"])
 async def list_clients(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
-    status_filter: str | None = Query(None, alias="status"),
-    search: str | None = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    search: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):

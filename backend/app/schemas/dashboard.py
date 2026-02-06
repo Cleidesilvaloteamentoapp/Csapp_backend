@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Dashboard and financial overview schemas."""
 
 from datetime import date, datetime
@@ -64,8 +66,8 @@ class ClientSummary(BaseModel):
     """Summary data for the client portal."""
 
     total_lots: int = 0
-    next_due_date: date | None = None
-    next_due_amount: Decimal | None = None
+    next_due_date: Optional[date] = None
+    next_due_amount: Optional[Decimal] = None
     pending_invoices: int = 0
     overdue_invoices: int = 0
 

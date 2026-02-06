@@ -1,3 +1,4 @@
+
 """Client portal dashboard endpoints."""
 
 from datetime import date

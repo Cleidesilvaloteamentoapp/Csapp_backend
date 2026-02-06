@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Authentication request / response schemas."""
 
 from uuid import UUID
@@ -42,7 +44,7 @@ class MeResponse(BaseModel):
     """Current user info."""
 
     id: UUID
-    company_id: UUID | None = None
+    company_id: Optional[UUID] = None
     role: str
     full_name: str
     email: str

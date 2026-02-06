@@ -1,5 +1,6 @@
-"""FastAPI dependencies: authentication, authorization, database sessions."""
 
+"""FastAPI dependencies: authentication, authorization, database sessions."""
+from typing import Optional
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
@@ -31,7 +32,7 @@ class TokenPayload:
 
     def __init__(self, payload: dict) -> None:
         self.user_id: str = payload["sub"]
-        self.company_id: str | None = payload.get("company_id")
+        self.company_id: Optional[str] = payload.get("company_id")
         self.role: str = payload.get("role", "client")
         self.token_type: str = payload.get("type", "access")
 
@@ -40,7 +41,7 @@ class TokenPayload:
         return UUID(self.user_id)
 
     @property
-    def company_uuid(self) -> UUID | None:
+    def company_uuid(self) -> Optional[UUID]:
         return UUID(self.company_id) if self.company_id else None
 
 
@@ -50,7 +51,7 @@ class TokenPayload:
 
 async def get_current_user(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Profile:
     """Decode the bearer token, load the profile, and populate request.state

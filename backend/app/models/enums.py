@@ -1,3 +1,4 @@
+
 """Database enums used across models."""
 
 import enum

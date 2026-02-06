@@ -1,3 +1,5 @@
+from typing import Optional
+
 """Company model – top-level tenant entity."""
 
 import uuid
@@ -22,7 +24,7 @@ class Company(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
-    settings: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    settings: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     status: Mapped[CompanyStatus] = mapped_column(
         SAEnum(CompanyStatus, name="company_status", create_constraint=True),
         default=CompanyStatus.ACTIVE,
