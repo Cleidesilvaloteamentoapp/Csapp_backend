@@ -28,7 +28,7 @@ class Referral(Base, TenantMixin, TimestampMixin):
     referred_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     referred_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[ReferralStatus] = mapped_column(
-        SAEnum(ReferralStatus, name="referral_status", create_constraint=True),
+        SAEnum(ReferralStatus, name="referral_status", create_constraint=False),
         default=ReferralStatus.PENDING,
         nullable=False,
         index=True,

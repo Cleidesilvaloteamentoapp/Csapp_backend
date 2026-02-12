@@ -26,7 +26,7 @@ class Company(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     settings: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     status: Mapped[CompanyStatus] = mapped_column(
-        SAEnum(CompanyStatus, name="company_status", create_constraint=True),
+        SAEnum(CompanyStatus, name="company_status", create_constraint=False),
         default=CompanyStatus.ACTIVE,
         nullable=False,
         index=True,

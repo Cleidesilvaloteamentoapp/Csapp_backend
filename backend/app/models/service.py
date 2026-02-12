@@ -55,7 +55,7 @@ class ServiceOrder(Base, TenantMixin, TimestampMixin):
     requested_date: Mapped[date] = mapped_column(Date, nullable=False)
     execution_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[ServiceOrderStatus] = mapped_column(
-        SAEnum(ServiceOrderStatus, name="service_order_status", create_constraint=True),
+        SAEnum(ServiceOrderStatus, name="service_order_status", create_constraint=False),
         default=ServiceOrderStatus.REQUESTED,
         nullable=False,
         index=True,

@@ -23,7 +23,7 @@ class Profile(Base, TenantMixin, TimestampMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     role: Mapped[UserRole] = mapped_column(
-        SAEnum(UserRole, name="user_role", create_constraint=True),
+        SAEnum(UserRole, name="user_role", create_constraint=False),
         nullable=False,
         index=True,
     )

@@ -30,7 +30,7 @@ class Invoice(Base, TenantMixin, TimestampMixin):
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     installment_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[InvoiceStatus] = mapped_column(
-        SAEnum(InvoiceStatus, name="invoice_status", create_constraint=True),
+        SAEnum(InvoiceStatus, name="invoice_status", create_constraint=False),
         default=InvoiceStatus.PENDING,
         nullable=False,
         index=True,

@@ -5,52 +5,52 @@ import enum
 
 
 class CompanyStatus(str, enum.Enum):
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    INACTIVE = "inactive"
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    INACTIVE = "INACTIVE"
 
 
 class UserRole(str, enum.Enum):
-    SUPER_ADMIN = "super_admin"
-    COMPANY_ADMIN = "company_admin"
-    CLIENT = "client"
+    SUPER_ADMIN = "SUPER_ADMIN"
+    COMPANY_ADMIN = "COMPANY_ADMIN"
+    CLIENT = "CLIENT"
 
 
 class ClientStatus(str, enum.Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    DEFAULTER = "defaulter"
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    DEFAULTER = "DEFAULTER"
 
 
 class LotStatus(str, enum.Enum):
-    AVAILABLE = "available"
-    RESERVED = "reserved"
-    SOLD = "sold"
+    AVAILABLE = "AVAILABLE"
+    RESERVED = "RESERVED"
+    SOLD = "SOLD"
 
 
 class ClientLotStatus(str, enum.Enum):
-    ACTIVE = "active"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class InvoiceStatus(str, enum.Enum):
-    PENDING = "pending"
-    PAID = "paid"
-    OVERDUE = "overdue"
-    CANCELLED = "cancelled"
+    PENDING = "PENDING"
+    PAID = "PAID"
+    OVERDUE = "OVERDUE"
+    CANCELLED = "CANCELLED"
 
 
 class ServiceOrderStatus(str, enum.Enum):
-    REQUESTED = "requested"
-    APPROVED = "approved"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
+    REQUESTED = "REQUESTED"
+    APPROVED = "APPROVED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class ReferralStatus(str, enum.Enum):
-    PENDING = "pending"
-    CONTACTED = "contacted"
-    CONVERTED = "converted"
-    LOST = "lost"
+    PENDING = "PENDING"
+    CONTACTED = "CONTACTED"
+    CONVERTED = "CONVERTED"
+    LOST = "LOST"

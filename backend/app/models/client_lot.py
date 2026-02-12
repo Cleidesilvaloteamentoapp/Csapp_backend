@@ -33,7 +33,7 @@ class ClientLot(Base, TenantMixin, TimestampMixin):
     total_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     payment_plan: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     status: Mapped[ClientLotStatus] = mapped_column(
-        SAEnum(ClientLotStatus, name="client_lot_status", create_constraint=True),
+        SAEnum(ClientLotStatus, name="client_lot_status", create_constraint=False),
         default=ClientLotStatus.ACTIVE,
         nullable=False,
         index=True,

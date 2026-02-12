@@ -31,7 +31,7 @@ class Lot(Base, TenantMixin, TimestampMixin):
     area_m2: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     status: Mapped[LotStatus] = mapped_column(
-        SAEnum(LotStatus, name="lot_status", create_constraint=True),
+        SAEnum(LotStatus, name="lot_status", create_constraint=False),
         default=LotStatus.AVAILABLE,
         nullable=False,
         index=True,

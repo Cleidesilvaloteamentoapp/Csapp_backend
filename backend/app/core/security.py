@@ -19,9 +19,9 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 class UserRole(str, Enum):
     """System-wide user roles."""
 
-    SUPER_ADMIN = "super_admin"
-    COMPANY_ADMIN = "company_admin"
-    CLIENT = "client"
+    SUPER_ADMIN = "SUPER_ADMIN"
+    COMPANY_ADMIN = "COMPANY_ADMIN"
+    CLIENT = "CLIENT"
 
 
 # ---------------------------------------------------------------------------
