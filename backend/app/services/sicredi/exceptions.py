@@ -1,11 +1,13 @@
 
 """Sicredi-specific exception hierarchy."""
 
+from typing import Optional
+
 
 class SicrediError(Exception):
     """Base exception for all Sicredi integration errors."""
 
-    def __init__(self, detail: str = "Sicredi integration error", status_code: int | None = None, raw_response: dict | None = None):
+    def __init__(self, detail: str = "Sicredi integration error", status_code: Optional[int] = None, raw_response: Optional[dict] = None):
         self.detail = detail
         self.status_code = status_code
         self.raw_response = raw_response or {}
