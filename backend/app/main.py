@@ -20,6 +20,7 @@ from app.utils.exceptions import (
     InsufficientPermissionsError,
     InvalidTokenError,
     ResourceNotFoundError,
+    SicrediIntegrationError,
     StorageError,
     TenantIsolationError,
 )
@@ -106,6 +107,12 @@ async def asaas_error_handler(request: Request, exc: AsaasIntegrationError):
 @app.exception_handler(StorageError)
 async def storage_error_handler(request: Request, exc: StorageError):
     return JSONResponse(status_code=400, content={"detail": exc.detail})
+
+
+@app.exception_handler(SicrediIntegrationError)
+async def sicredi_error_handler(request: Request, exc: SicrediIntegrationError):
+    logger.error("sicredi_integration_error", detail=exc.detail)
+    return JSONResponse(status_code=502, content={"detail": exc.detail})
 
 
 # ---------------------------------------------------------------------------

@@ -57,3 +57,11 @@ class InvalidTokenError(Exception):
     def __init__(self, detail: str = "Invalid or expired token"):
         self.detail = detail
         super().__init__(self.detail)
+
+
+class SicrediIntegrationError(Exception):
+    """Raised when the Sicredi API returns an error."""
+
+    def __init__(self, detail: str = "Sicredi integration error"):
+        self.detail = detail
+        super().__init__(self.detail)
