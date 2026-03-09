@@ -262,3 +262,33 @@ class SicrediBoletos:
 
         logger.info("sicredi_boleto_cancelar_abatimento", nosso_numero=nosso_numero)
         return await self._client.request("PATCH", url, json={}, extra_headers=extra_headers)
+
+    async def negativar(self, nosso_numero: str) -> Any:
+        """Request negativation for an overdue boleto.
+
+        Args:
+            nosso_numero: The bank-assigned boleto number (9 digits).
+
+        Returns:
+            API response with transactionId and statusComando.
+        """
+        url = f"{self._base_url}/boletos/{nosso_numero}/negativacao"
+        extra_headers = {"codigoBeneficiario": self._client.credentials.codigo_beneficiario}
+
+        logger.info("sicredi_boleto_negativar", nosso_numero=nosso_numero)
+        return await self._client.request("PATCH", url, json={}, extra_headers=extra_headers)
+
+    async def sustar_negativacao_baixar(self, nosso_numero: str) -> Any:
+        """Cancel negativation and simultaneously cancel (baixa) the boleto.
+
+        Args:
+            nosso_numero: The bank-assigned boleto number (9 digits).
+
+        Returns:
+            API response with transactionId and statusComando.
+        """
+        url = f"{self._base_url}/boletos/{nosso_numero}/sustar-negativacao-baixar-titulo"
+        extra_headers = {"codigoBeneficiario": self._client.credentials.codigo_beneficiario}
+
+        logger.info("sicredi_boleto_sustar_negativacao_baixar", nosso_numero=nosso_numero)
+        return await self._client.request("PATCH", url, json={}, extra_headers=extra_headers)

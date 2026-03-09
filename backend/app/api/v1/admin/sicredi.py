@@ -391,7 +391,79 @@ async def baixar_boleto(
     except SicrediError as exc:
         raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
 
+    # Auto-update local DB status
+    stmt = select(Boleto).where(
+        Boleto.nosso_numero == nosso_numero,
+        Boleto.company_id == admin.company_id,
+    )
+    db_result = await db.execute(stmt)
+    boleto_record = db_result.scalar_one_or_none()
+    if boleto_record:
+        boleto_record.status = BoletoStatus.CANCELADO
+        await db.commit()
+        logger.info(f"Boleto {nosso_numero} local status updated to CANCELADO")
+
     return {"status": "ok", "detail": "Boleto cancelled", "response": result}
+
+
+@router.patch("/boletos/{nosso_numero}/negativacao")
+async def negativar_boleto(
+    nosso_numero: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Request negativation for an overdue boleto."""
+    client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+
+    try:
+        result = await client.boletos.negativar(nosso_numero)
+        await sicredi_service.persist_token_cache(db, admin.company_id)
+    except SicrediError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
+
+    # Auto-update local DB status
+    stmt = select(Boleto).where(
+        Boleto.nosso_numero == nosso_numero,
+        Boleto.company_id == admin.company_id,
+    )
+    db_result = await db.execute(stmt)
+    boleto_record = db_result.scalar_one_or_none()
+    if boleto_record:
+        boleto_record.status = BoletoStatus.NEGATIVADO
+        await db.commit()
+        logger.info(f"Boleto {nosso_numero} local status updated to NEGATIVADO")
+
+    return {"status": "ok", "detail": "Negativation requested", "response": result}
+
+
+@router.patch("/boletos/{nosso_numero}/sustar-negativacao-baixar-titulo")
+async def sustar_negativacao_baixar_boleto(
+    nosso_numero: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Cancel negativation and simultaneously cancel (baixa) the boleto."""
+    client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+
+    try:
+        result = await client.boletos.sustar_negativacao_baixar(nosso_numero)
+        await sicredi_service.persist_token_cache(db, admin.company_id)
+    except SicrediError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
+
+    # Auto-update local DB status
+    stmt = select(Boleto).where(
+        Boleto.nosso_numero == nosso_numero,
+        Boleto.company_id == admin.company_id,
+    )
+    db_result = await db.execute(stmt)
+    boleto_record = db_result.scalar_one_or_none()
+    if boleto_record:
+        boleto_record.status = BoletoStatus.CANCELADO
+        await db.commit()
+        logger.info(f"Boleto {nosso_numero} local status updated to CANCELADO (negativation cancelled + baixa)")
+
+    return {"status": "ok", "detail": "Negativation cancelled and boleto baixado", "response": result}
 
 
 @router.patch("/boletos/{nosso_numero}/data-vencimento")

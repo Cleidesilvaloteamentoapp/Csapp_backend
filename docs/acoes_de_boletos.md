@@ -317,3 +317,62 @@ A operação será rejeitada nos seguintes casos principais:
 | **422 Unprocessable Entity** | **Título não cadastrado**: O Nosso Número informado não foi localizado na base. |
 
 **Observação:** Por padrão, o recurso de comando de instrução da API responde em milissegundos.
+---
+Esta documentação detalha a operação de **Consulta de Boletos por Nosso Número** em ambiente de produção, utilizada para obter informações detalhadas e a situação atual de um título específico registrado na carteira.
+
+### 1. Detalhes da Operação
+A consulta é realizada via método **GET** e retorna os dados do boleto em formato JSON com codificação Unicode UTF-8. O Sicredi disponibiliza atualmente duas versões para este recurso:
+
+*   **Versão 1 (v1):** Retorna a data de liquidação exata em que o pagamento ocorreu, mesmo em fins de semana ou feriados.
+*   **Versão 2 (v2):** Permite, via header opcional, que a data de liquidação seja ajustada para o próximo dia útil.
+
+**Endpoints de Produção:**
+*   **v1:** `https://api-parceiro.sicredi.com.br/cobranca/boleto/v1/boletos`
+*   **v2:** `https://api-parceiro.sicredi.com.br/cobranca/boleto/v2/boletos`
+
+---
+
+### 2. Cabeçalhos (Headers) Obrigatórios
+Para autenticar e processar a consulta, os seguintes headers devem ser enviados:
+
+| Header | Tipo | Descrição |
+| :--- | :--- | :--- |
+| **x-api-key** | UUID | Token de acesso gerado no portal do desenvolvedor. |
+| **Authorization** | Bearer | `Bearer` + `access_token` obtido na autenticação. |
+| **Content-Type** | String | `application/json`. |
+| **cooperativa** | String | Código da cooperativa do beneficiário (4 dígitos). |
+| **posto** | String | Código do posto/agência do beneficiário (2 dígitos). |
+| **data-movimento** | Boolean | **(Exclusivo v2)** Se `true`, retorna a data de liquidação no próximo dia útil. |
+
+---
+
+### 3. Parâmetros de Consulta (Query Params)
+Os filtros abaixo devem ser passados na URL da requisição:
+
+*   **codigoBeneficiario (Obrigatório):** Código do convênio de cobrança (5 dígitos).
+*   **nossoNumero (Obrigatório):** Número de identificação do boleto no Sicredi (**9 dígitos**, numérico).
+
+---
+
+### 4. Retorno da Consulta (Saída)
+Em caso de sucesso (HTTP 200), a API retorna um objeto JSON contendo, entre outros, os seguintes campos:
+
+*   **Dados do Título:** `linhaDigitavel`, `codigoBarras`, `carteira`, `seuNumero`, `nossoNumero`, `valorNominal`, `dataEmissao` e `dataVencimento`.
+*   **Situação:** Indica o status atual do boleto (ex: `EM CARTEIRA`, `VENCIDO`, `LIQUIDADO`, `BAIXADO POR SOLICITACAO`, `PROTESTADO`, `NEGATIVADO`).
+*   **Pagador:** Objeto contendo nome e documento do pagador.
+*   **Boleto Híbrido:** Retorna o `txId` e o `codigoQrCode` caso o título possua Pix.
+*   **Instruções:** Detalhes de `juros`, `multa`, `descontos` e `abatimento`.
+
+---
+
+### 5. Cenários de Erro
+Abaixo estão os principais códigos de erro retornados pela consulta:
+
+| Status HTTP | Mensagem / Descrição |
+| :--- | :--- |
+| **400 Bad Request** | O campo `nossoNumero` deve ter exatamente 9 caracteres numéricos. |
+| **401 Unauthorized** | Token de acesso ausente, expirado ou inválido. |
+| **404 Not Found** | Não existe resultado para a consulta informada (Título não encontrado). |
+| **429 Too Many Requests** | Excesso de requisições enviadas em um curto espaço de tempo. |
+
+**Observação:** Por padrão, o recurso de consulta da API Sicredi responde em milissegundos.
