@@ -14,6 +14,7 @@ celery = Celery(
         "app.tasks.invoice_tasks",
         "app.tasks.notification_tasks",
         "app.tasks.adjustment_tasks",
+        "app.tasks.batch_tasks",
     ],
 )
 

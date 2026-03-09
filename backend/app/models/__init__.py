@@ -2,6 +2,7 @@
 """Re-export all models so Alembic and the app can discover them."""
 
 from app.models.audit import AuditLog  # noqa: F401
+from app.models.batch_operation import BatchOperation  # noqa: F401
 from app.models.boleto import Boleto  # noqa: F401
 from app.models.client import Client  # noqa: F401
 from app.models.client_lot import ClientLot  # noqa: F401

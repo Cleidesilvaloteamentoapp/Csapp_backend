@@ -16,6 +16,7 @@ Este documento consolida **todos** os endpoints disponíveis para a Central de B
 6. [Endpoints do Cliente](#6-endpoints-do-cliente)
 7. [Status e Fluxos](#7-status-e-fluxos)
 8. [Tratamento de Erros](#8-tratamento-de-erros)
+9. [Operações em Lote (Batch)](#9-operações-em-lote-batch)
 
 ---
 
@@ -681,12 +682,577 @@ const ACTIONS_BY_STATUS: Record<string, string[]> = {
 
 ---
 
+## 9. Operações em Lote (Batch)
+
+Endpoints para **criação em massa** e **operações em lote** sobre boletos existentes. Todas as operações são processadas em background via Celery e retornam `202 Accepted` com um `batch_id` para acompanhamento.
+
+### 9.1 Criação em Lote
+
+**`POST /admin/sicredi/boletos/batch`**
+
+Cria múltiplos boletos para um cliente com frequência e duração configuráveis.
+
+**Payload:**
+```json
+{
+  "client_id": "uuid",
+  "pagador": {
+    "tipo_pessoa": "PESSOA_FISICA",
+    "documento": "12345678900",
+    "nome": "João Silva",
+    "endereco": "Rua das Flores 123",
+    "cidade": "Porto Alegre",
+    "uf": "RS",
+    "cep": "90000000",
+    "email": "joao@email.com",
+    "telefone": "51999998888"
+  },
+  "valor": 1250.00,
+  "frequency": "MENSAL",
+  "duration_months": 12,
+  "data_primeiro_vencimento": "2024-05-15",
+  "tipo_cobranca": "NORMAL",
+  "especie_documento": "DUPLICATA_MERCANTIL_INDICACAO",
+  "tipo_juros": "VALOR_DIA",
+  "juros": 0.41,
+  "tipo_multa": "PERCENTUAL",
+  "multa": 2.00,
+  "dias_negativacao_auto": 60,
+  "informativos": ["Parcela {n} de {total}"],
+  "mensagens": ["Após vencimento cobrar multa de 2%"]
+}
+```
+
+**Frequências disponíveis:**
+
+| Frequência | Intervalo | Exemplo (12 meses) |
+|---|---|---|
+| `MENSAL` | 1 mês | 12 parcelas |
+| `TRIMESTRAL` | 3 meses | 4 parcelas |
+| `SEMESTRAL` | 6 meses | 2 parcelas |
+| `ANUAL` | 12 meses | 1 parcela |
+
+**Response 202:**
+```json
+{
+  "batch_id": "uuid",
+  "type": "BATCH_CREATE",
+  "status": "PENDING",
+  "total_items": 12,
+  "message": "Batch creation queued: 12 boletos (MENSAL, 12 months)"
+}
+```
+
+**Limites:** Máximo 120 boletos por batch. Duração de 1 a 120 meses.
+
+---
+
+### 9.2 Operação em Lote
+
+**`POST /admin/sicredi/boletos/batch-operation`**
+
+Executa uma ação em massa sobre múltiplos boletos selecionados.
+
+**Payload — Baixa em lote:**
+```json
+{
+  "nosso_numeros": ["123456789", "123456790", "123456791"],
+  "action": "BAIXA"
+}
+```
+
+**Payload — Alterar vencimento em lote:**
+```json
+{
+  "nosso_numeros": ["123456789", "123456790"],
+  "action": "ALTERAR_VENCIMENTO",
+  "data_vencimento": "2024-06-15"
+}
+```
+
+**Payload — Alterar juros em lote:**
+```json
+{
+  "nosso_numeros": ["123456789", "123456790"],
+  "action": "ALTERAR_JUROS",
+  "valor_ou_percentual": "0.50"
+}
+```
+
+**Payload — Conceder abatimento em lote:**
+```json
+{
+  "nosso_numeros": ["123456789", "123456790"],
+  "action": "CONCEDER_ABATIMENTO",
+  "valor_abatimento": "100.00"
+}
+```
+
+**Payload — Negativação em lote:**
+```json
+{
+  "nosso_numeros": ["123456789", "123456790"],
+  "action": "NEGATIVACAO"
+}
+```
+
+**Ações disponíveis:**
+
+| Action | Descrição | Payload extra obrigatório |
+|---|---|---|
+| `BAIXA` | Cancelar boletos | — |
+| `ALTERAR_VENCIMENTO` | Alterar data de vencimento | `data_vencimento` |
+| `ALTERAR_JUROS` | Alterar juros | `valor_ou_percentual` |
+| `ALTERAR_DESCONTO` | Alterar descontos | `valor_desconto_1/2/3` |
+| `CONCEDER_ABATIMENTO` | Conceder abatimento | `valor_abatimento` |
+| `CANCELAR_ABATIMENTO` | Cancelar abatimento | — |
+| `NEGATIVACAO` | Incluir negativação | — |
+| `SUSTAR_NEGATIVACAO_BAIXAR` | Sustar negativação + baixa | — |
+
+**Response 202:**
+```json
+{
+  "batch_id": "uuid",
+  "type": "BATCH_BAIXA",
+  "status": "PENDING",
+  "total_items": 3,
+  "message": "Batch BAIXA queued for 3 boletos"
+}
+```
+
+**Limites:** Máximo 100 boletos por operação em lote.
+
+---
+
+### 9.3 Consultar Progresso do Batch
+
+**`GET /admin/sicredi/boletos/batch/{batch_id}`**
+
+Retorna o status em tempo real da operação em lote, incluindo resultado individual de cada boleto.
+
+**Response 200 — Em andamento:**
+```json
+{
+  "id": "uuid",
+  "type": "BATCH_CREATE",
+  "status": "PROCESSING",
+  "total_items": 12,
+  "completed_items": 7,
+  "failed_items": 0,
+  "progress_percent": 58.3,
+  "frequency": "MENSAL",
+  "duration_months": 12,
+  "error_summary": null,
+  "results": [
+    {
+      "index": 0,
+      "nosso_numero": "123456789",
+      "seu_numero": "BATCH-a1b2c3d4-001",
+      "status": "SUCCESS",
+      "detail": "Boleto created, due 2024-05-15",
+      "boleto_id": "uuid"
+    },
+    {
+      "index": 1,
+      "nosso_numero": "123456790",
+      "seu_numero": "BATCH-a1b2c3d4-002",
+      "status": "SUCCESS",
+      "detail": "Boleto created, due 2024-06-15",
+      "boleto_id": "uuid"
+    }
+  ],
+  "created_at": "2024-03-09T14:30:00Z",
+  "updated_at": "2024-03-09T14:31:15Z"
+}
+```
+
+**Response 200 — Concluído com falhas parciais:**
+```json
+{
+  "id": "uuid",
+  "type": "BATCH_BAIXA",
+  "status": "COMPLETED",
+  "total_items": 3,
+  "completed_items": 2,
+  "failed_items": 1,
+  "progress_percent": 100.0,
+  "frequency": null,
+  "duration_months": null,
+  "error_summary": "1 of 3 items failed",
+  "results": [
+    {
+      "index": 0,
+      "nosso_numero": "123456789",
+      "status": "SUCCESS",
+      "detail": "BAIXA executed successfully"
+    },
+    {
+      "index": 1,
+      "nosso_numero": "123456790",
+      "status": "SUCCESS",
+      "detail": "BAIXA executed successfully"
+    },
+    {
+      "index": 2,
+      "nosso_numero": "123456791",
+      "status": "FAILED",
+      "detail": "Título já baixado, liquidado ou em fluxo de negativação/protesto."
+    }
+  ],
+  "created_at": "2024-03-09T14:30:00Z",
+  "updated_at": "2024-03-09T14:30:05Z"
+}
+```
+
+**Status do batch (`status`):**
+
+| Status | Descrição |
+|---|---|
+| `PENDING` | Operação na fila, aguardando processamento |
+| `PROCESSING` | Em execução — boletos sendo processados |
+| `COMPLETED` | Concluído (pode ter falhas parciais, ver `failed_items`) |
+| `FAILED` | Todos os itens falharam ou erro crítico |
+
+---
+
+### 9.4 Implementação Frontend — Guia de UX
+
+#### Fluxo de Criação em Lote
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  📦 Criar Boletos em Lote                                │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  Cliente: [Selecionar cliente ▾]                         │
+│                                                          │
+│  Valor da parcela:  R$ [1.250,00]                        │
+│                                                          │
+│  Frequência:                                             │
+│  ┌──────────┐ ┌────────────┐ ┌───────────┐ ┌──────────┐ │
+│  │● Mensal  │ │ Trimestral │ │ Semestral │ │  Anual   │ │
+│  └──────────┘ └────────────┘ └───────────┘ └──────────┘ │
+│                                                          │
+│  Duração: [12] meses    →  12 parcelas                   │
+│                                                          │
+│  1º Vencimento: [15/05/2024]                             │
+│                                                          │
+│  ┌──── Preview ─────────────────────────────────────┐    │
+│  │  Parcela 1:  R$ 1.250,00  venc. 15/05/2024       │    │
+│  │  Parcela 2:  R$ 1.250,00  venc. 15/06/2024       │    │
+│  │  Parcela 3:  R$ 1.250,00  venc. 15/07/2024       │    │
+│  │  ...                                              │    │
+│  │  Parcela 12: R$ 1.250,00  venc. 15/04/2025       │    │
+│  │  ─────────────────────────────────────────        │    │
+│  │  Total: R$ 15.000,00                              │    │
+│  └───────────────────────────────────────────────────┘    │
+│                                                          │
+│  [Cancelar]                    [Criar 12 boletos →]      │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Fluxo de Operação em Lote
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  ⚡ Operação em Lote                                     │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  ☑ 123456789 — João Silva  — R$ 1.250,00 — 🟡 VENCIDO   │
+│  ☑ 123456790 — João Silva  — R$ 1.250,00 — 🟡 VENCIDO   │
+│  ☑ 123456791 — João Silva  — R$ 1.250,00 — 🟡 VENCIDO   │
+│  ☐ 123456792 — João Silva  — R$ 1.250,00 — 🟢 NORMAL    │
+│                                                          │
+│  Ação: [Baixa ▾]                                         │
+│                                                          │
+│  [Cancelar]              [Aplicar em 3 boletos →]        │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Acompanhamento de Progresso (Polling)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  🔄 Processando Batch — BATCH_CREATE                     │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  ████████████░░░░░░░░  7 de 12  (58.3%)                  │
+│                                                          │
+│  ✅ Parcela 1 — 123456789 — 15/05/2024                   │
+│  ✅ Parcela 2 — 123456790 — 15/06/2024                   │
+│  ✅ Parcela 3 — 123456791 — 15/07/2024                   │
+│  ✅ Parcela 4 — 123456792 — 15/08/2024                   │
+│  ✅ Parcela 5 — 123456793 — 15/09/2024                   │
+│  ✅ Parcela 6 — 123456794 — 15/10/2024                   │
+│  ✅ Parcela 7 — 123456795 — 15/11/2024                   │
+│  ⏳ Parcela 8 — processando...                           │
+│  ⬜ Parcela 9                                            │
+│  ⬜ Parcela 10                                           │
+│  ⬜ Parcela 11                                           │
+│  ⬜ Parcela 12                                           │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Código de Polling (TypeScript/React)
+
+```typescript
+import { useEffect, useState, useRef } from 'react';
+
+interface BatchStatus {
+  id: string;
+  type: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  total_items: number;
+  completed_items: number;
+  failed_items: number;
+  progress_percent: number;
+  frequency?: string;
+  duration_months?: number;
+  error_summary?: string;
+  results: BatchItemResult[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface BatchItemResult {
+  index: number;
+  nosso_numero?: string;
+  seu_numero?: string;
+  status: 'SUCCESS' | 'FAILED';
+  detail: string;
+  boleto_id?: string;
+}
+
+function useBatchProgress(batchId: string | null) {
+  const [data, setData] = useState<BatchStatus | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout>();
+
+  useEffect(() => {
+    if (!batchId) return;
+
+    const poll = async () => {
+      const res = await fetch(`/api/v1/admin/sicredi/boletos/batch/${batchId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const batch: BatchStatus = await res.json();
+      setData(batch);
+
+      // Stop polling when finished
+      if (batch.status === 'COMPLETED' || batch.status === 'FAILED') {
+        clearInterval(intervalRef.current);
+      }
+    };
+
+    poll(); // initial fetch
+    intervalRef.current = setInterval(poll, 2000); // every 2 seconds
+
+    return () => clearInterval(intervalRef.current);
+  }, [batchId]);
+
+  return data;
+}
+
+// Usage:
+const batchStatus = useBatchProgress(activeBatchId);
+```
+
+#### Criação em Lote (TypeScript)
+
+```typescript
+async function createBatchBoletos(params: {
+  clientId: string;
+  pagador: Pagador;
+  valor: number;
+  frequency: 'MENSAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
+  durationMonths: number;
+  dataPrimeiroVencimento: string; // YYYY-MM-DD
+  tipoJuros?: string;
+  juros?: number;
+  tipoMulta?: string;
+  multa?: number;
+}) {
+  const res = await fetch('/api/v1/admin/sicredi/boletos/batch', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      client_id: params.clientId,
+      pagador: params.pagador,
+      valor: params.valor,
+      frequency: params.frequency,
+      duration_months: params.durationMonths,
+      data_primeiro_vencimento: params.dataPrimeiroVencimento,
+      tipo_juros: params.tipoJuros,
+      juros: params.juros,
+      tipo_multa: params.tipoMulta,
+      multa: params.multa,
+    }),
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+  return res.json(); // { batch_id, type, status, total_items, message }
+}
+```
+
+#### Operação em Lote (TypeScript)
+
+```typescript
+async function executeBatchOperation(params: {
+  nossoNumeros: string[];
+  action: 'BAIXA' | 'ALTERAR_VENCIMENTO' | 'ALTERAR_JUROS' | 'ALTERAR_DESCONTO' |
+          'CONCEDER_ABATIMENTO' | 'CANCELAR_ABATIMENTO' | 'NEGATIVACAO' | 'SUSTAR_NEGATIVACAO_BAIXAR';
+  dataVencimento?: string;
+  valorOuPercentual?: string;
+  valorAbatimento?: number;
+}) {
+  const res = await fetch('/api/v1/admin/sicredi/boletos/batch-operation', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      nosso_numeros: params.nossoNumeros,
+      action: params.action,
+      data_vencimento: params.dataVencimento,
+      valor_ou_percentual: params.valorOuPercentual,
+      valor_abatimento: params.valorAbatimento,
+    }),
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+  return res.json(); // { batch_id, type, status, total_items, message }
+}
+```
+
+#### Cálculo de Preview no Frontend
+
+```typescript
+const FREQ_MONTHS: Record<string, number> = {
+  MENSAL: 1,
+  TRIMESTRAL: 3,
+  SEMESTRAL: 6,
+  ANUAL: 12,
+};
+
+function previewInstallments(
+  valor: number,
+  frequency: string,
+  durationMonths: number,
+  firstDueDate: Date
+) {
+  const interval = FREQ_MONTHS[frequency] || 1;
+  const count = Math.floor(durationMonths / interval);
+  const installments = [];
+
+  for (let i = 0; i < count; i++) {
+    const dueDate = new Date(firstDueDate);
+    dueDate.setMonth(dueDate.getMonth() + interval * i);
+    installments.push({
+      number: i + 1,
+      valor,
+      dueDate: dueDate.toISOString().split('T')[0],
+    });
+  }
+
+  return {
+    installments,
+    total: valor * count,
+    count,
+  };
+}
+```
+
+#### Tipos TypeScript (Batch)
+
+```typescript
+type BatchFrequency = 'MENSAL' | 'TRIMESTRAL' | 'SEMESTRAL' | 'ANUAL';
+
+type BatchAction =
+  | 'BAIXA'
+  | 'ALTERAR_VENCIMENTO'
+  | 'ALTERAR_JUROS'
+  | 'ALTERAR_DESCONTO'
+  | 'CONCEDER_ABATIMENTO'
+  | 'CANCELAR_ABATIMENTO'
+  | 'NEGATIVACAO'
+  | 'SUSTAR_NEGATIVACAO_BAIXAR';
+
+type BatchStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+// Actions available for batch by boleto status
+const BATCH_ACTIONS_BY_STATUS: Record<string, BatchAction[]> = {
+  NORMAL: ['BAIXA', 'ALTERAR_VENCIMENTO', 'ALTERAR_JUROS', 'ALTERAR_DESCONTO', 'CONCEDER_ABATIMENTO', 'CANCELAR_ABATIMENTO'],
+  VENCIDO: ['BAIXA', 'NEGATIVACAO', 'ALTERAR_VENCIMENTO', 'ALTERAR_JUROS', 'CONCEDER_ABATIMENTO'],
+  NEGATIVADO: ['SUSTAR_NEGATIVACAO_BAIXAR'],
+  LIQUIDADO: [],
+  CANCELADO: [],
+};
+
+// Get common actions for a selection of boletos
+function getAvailableBatchActions(selectedBoletos: Boleto[]): BatchAction[] {
+  if (selectedBoletos.length === 0) return [];
+  const actionSets = selectedBoletos.map(b => new Set(BATCH_ACTIONS_BY_STATUS[b.status] || []));
+  const first = actionSets[0];
+  return [...first].filter(action => actionSets.every(s => s.has(action)));
+}
+```
+
+---
+
 ## 📝 SQL para Supabase
 
-Antes de usar o status `NEGATIVADO`, execute no SQL Editor do Supabase:
+Execute no SQL Editor do Supabase:
 
 ```sql
+-- 1. Status NEGATIVADO (se ainda não executado)
 ALTER TYPE boleto_status ADD VALUE IF NOT EXISTS 'NEGATIVADO';
+
+-- 2. Tabela batch_operations (executar sql/008_batch_operations.sql completo)
+-- Ou diretamente:
+CREATE TABLE IF NOT EXISTS batch_operations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    type VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    client_id UUID REFERENCES clients(id) ON DELETE SET NULL,
+    frequency VARCHAR(20),
+    duration_months INTEGER,
+    total_items INTEGER NOT NULL DEFAULT 0,
+    completed_items INTEGER NOT NULL DEFAULT 0,
+    failed_items INTEGER NOT NULL DEFAULT 0,
+    input_data JSONB DEFAULT '{}',
+    results JSONB DEFAULT '[]',
+    error_summary TEXT,
+    created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_operations_company ON batch_operations(company_id);
+CREATE INDEX IF NOT EXISTS idx_batch_operations_status ON batch_operations(status);
+CREATE INDEX IF NOT EXISTS idx_batch_operations_type ON batch_operations(type);
+CREATE INDEX IF NOT EXISTS idx_batch_operations_created_at ON batch_operations(created_at DESC);
+
+ALTER TABLE batch_operations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "batch_ops_select_own_company" ON batch_operations
+    FOR SELECT USING (company_id IN (
+        SELECT p.company_id FROM profiles p WHERE p.id = auth.uid()
+    ));
+
+CREATE POLICY "batch_ops_insert_own_company" ON batch_operations
+    FOR INSERT WITH CHECK (company_id IN (
+        SELECT p.company_id FROM profiles p WHERE p.id = auth.uid()
+    ));
+
+CREATE POLICY "batch_ops_update_own_company" ON batch_operations
+    FOR UPDATE USING (company_id IN (
+        SELECT p.company_id FROM profiles p WHERE p.id = auth.uid()
+    ));
 ```
 
 ---
@@ -722,6 +1288,13 @@ ALTER TYPE boleto_status ADD VALUE IF NOT EXISTS 'NEGATIVADO';
 | PATCH | `/admin/sicredi/boletos/{nn}/negativacao` | Incluir negativação |
 | PATCH | `/admin/sicredi/boletos/{nn}/sustar-negativacao-baixar-titulo` | Sustar negativação + baixa |
 
+### Admin — Batch (`/admin/sicredi/boletos/batch`)
+| Método | Endpoint | Descrição |
+|---|---|---|
+| POST | `/admin/sicredi/boletos/batch` | Criação em lote (frequência + duração) |
+| POST | `/admin/sicredi/boletos/batch-operation` | Operação em lote (ação em múltiplos boletos) |
+| GET | `/admin/sicredi/boletos/batch/{batch_id}` | Consultar progresso/resultado |
+
 ### Admin — Segunda Via (`/admin/segunda-via`)
 | Método | Endpoint | Descrição |
 |---|---|---|
@@ -751,4 +1324,4 @@ ALTER TYPE boleto_status ADD VALUE IF NOT EXISTS 'NEGATIVADO';
 | GET | `/admin/sicredi/webhook/contratos` | Listar webhooks |
 | PUT | `/admin/sicredi/webhook/contrato/{id}` | Alterar webhook |
 
-**Total: 31 endpoints** disponíveis na Central de Boletos.
+**Total: 34 endpoints** disponíveis na Central de Boletos.

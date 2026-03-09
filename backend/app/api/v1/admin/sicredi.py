@@ -48,6 +48,15 @@ from app.services.sicredi.schemas import (
 )
 from app.services import sicredi_service
 from app.services.sicredi.exceptions import SicrediError
+from app.models.batch_operation import BatchOperation
+from app.schemas.batch import (
+    BatchCriarBoletosRequest,
+    BatchOperationRequest,
+    BatchOperationResponse,
+    BatchStatusResponse,
+    BatchItemResult,
+)
+from app.tasks.batch_tasks import process_batch_creation, process_batch_operation
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -276,6 +285,193 @@ async def criar_boleto(
         nosso_numero=result.nossoNumero,
         txid=result.txid,
         qr_code=result.qrCode,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batch Operations (static-prefix routes — MUST come before {nosso_numero})
+# ---------------------------------------------------------------------------
+
+@router.post("/boletos/batch", response_model=BatchOperationResponse, status_code=status.HTTP_202_ACCEPTED)
+async def batch_criar_boletos(
+    payload: BatchCriarBoletosRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Create multiple boletos in batch with configurable frequency and duration.
+
+    The boletos are created asynchronously via a background task.
+    Use GET /boletos/batch/{batch_id} to track progress.
+    """
+    # Verify client exists
+    stmt = select(Client).where(
+        Client.id == payload.client_id,
+        Client.company_id == admin.company_id,
+    )
+    result_db = await db.execute(stmt)
+    if not result_db.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Calculate number of installments
+    freq_months = {"MENSAL": 1, "TRIMESTRAL": 3, "SEMESTRAL": 6, "ANUAL": 12}
+    interval = freq_months.get(payload.frequency, 1)
+    num_installments = payload.duration_months // interval
+
+    # Persist batch operation record
+    input_data = payload.model_dump(mode="json")
+    input_data["client_id"] = str(payload.client_id)
+    input_data["created_by"] = str(admin.id)
+    input_data["data_primeiro_vencimento"] = payload.data_primeiro_vencimento.isoformat()
+
+    batch = BatchOperation(
+        company_id=admin.company_id,
+        type="BATCH_CREATE",
+        status="PENDING",
+        client_id=payload.client_id,
+        frequency=payload.frequency,
+        duration_months=payload.duration_months,
+        total_items=num_installments,
+        input_data=input_data,
+        results=[],
+        created_by=admin.id,
+    )
+    db.add(batch)
+    await db.commit()
+    await db.refresh(batch)
+
+    # Enqueue Celery task
+    process_batch_creation.delay(str(batch.id), str(admin.company_id))
+
+    logger.info(
+        "batch_creation_enqueued",
+        batch_id=str(batch.id),
+        num_installments=num_installments,
+        frequency=payload.frequency,
+    )
+
+    return BatchOperationResponse(
+        batch_id=batch.id,
+        type=batch.type,
+        status=batch.status,
+        total_items=num_installments,
+        message=f"Batch creation queued: {num_installments} boletos ({payload.frequency}, {payload.duration_months} months)",
+    )
+
+
+@router.post("/boletos/batch-operation", response_model=BatchOperationResponse, status_code=status.HTTP_202_ACCEPTED)
+async def batch_operacao_boletos(
+    payload: BatchOperationRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Execute a bulk action on multiple existing boletos.
+
+    Supported actions: BAIXA, ALTERAR_VENCIMENTO, ALTERAR_JUROS,
+    ALTERAR_DESCONTO, CONCEDER_ABATIMENTO, CANCELAR_ABATIMENTO,
+    NEGATIVACAO, SUSTAR_NEGATIVACAO_BAIXAR.
+
+    Use GET /boletos/batch/{batch_id} to track progress.
+    """
+    action_type_map = {
+        "BAIXA": "BATCH_BAIXA",
+        "ALTERAR_VENCIMENTO": "BATCH_ALTERAR_VENCIMENTO",
+        "ALTERAR_JUROS": "BATCH_ALTERAR_JUROS",
+        "ALTERAR_DESCONTO": "BATCH_ALTERAR_DESCONTO",
+        "CONCEDER_ABATIMENTO": "BATCH_CONCEDER_ABATIMENTO",
+        "CANCELAR_ABATIMENTO": "BATCH_CANCELAR_ABATIMENTO",
+        "NEGATIVACAO": "BATCH_NEGATIVACAO",
+        "SUSTAR_NEGATIVACAO_BAIXAR": "BATCH_SUSTAR_NEGATIVACAO_BAIXAR",
+    }
+
+    batch_type = action_type_map.get(payload.action)
+    if not batch_type:
+        raise HTTPException(status_code=400, detail=f"Invalid action: {payload.action}")
+
+    input_data = payload.model_dump(mode="json")
+    if payload.data_vencimento:
+        input_data["data_vencimento"] = payload.data_vencimento.isoformat()
+
+    batch = BatchOperation(
+        company_id=admin.company_id,
+        type=batch_type,
+        status="PENDING",
+        total_items=len(payload.nosso_numeros),
+        input_data=input_data,
+        results=[],
+        created_by=admin.id,
+    )
+    db.add(batch)
+    await db.commit()
+    await db.refresh(batch)
+
+    # Enqueue Celery task
+    process_batch_operation.delay(str(batch.id), str(admin.company_id))
+
+    logger.info(
+        "batch_operation_enqueued",
+        batch_id=str(batch.id),
+        action=payload.action,
+        count=len(payload.nosso_numeros),
+    )
+
+    return BatchOperationResponse(
+        batch_id=batch.id,
+        type=batch.type,
+        status=batch.status,
+        total_items=len(payload.nosso_numeros),
+        message=f"Batch {payload.action} queued for {len(payload.nosso_numeros)} boletos",
+    )
+
+
+@router.get("/boletos/batch/{batch_id}", response_model=BatchStatusResponse)
+async def get_batch_status(
+    batch_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Get the status and progress of a batch operation."""
+    from uuid import UUID as _UUID
+
+    stmt = select(BatchOperation).where(
+        BatchOperation.id == _UUID(batch_id),
+        BatchOperation.company_id == admin.company_id,
+    )
+    result = await db.execute(stmt)
+    batch = result.scalar_one_or_none()
+
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch operation not found")
+
+    total = batch.total_items or 1
+    progress = round(((batch.completed_items + batch.failed_items) / total) * 100, 1)
+
+    raw_results = batch.results or []
+    items = [
+        BatchItemResult(
+            index=r.get("index", 0),
+            nosso_numero=r.get("nosso_numero"),
+            seu_numero=r.get("seu_numero"),
+            status=r.get("status", "PENDING"),
+            detail=r.get("detail", ""),
+            boleto_id=r.get("boleto_id"),
+        )
+        for r in raw_results
+    ]
+
+    return BatchStatusResponse(
+        id=batch.id,
+        type=batch.type,
+        status=batch.status,
+        total_items=batch.total_items,
+        completed_items=batch.completed_items,
+        failed_items=batch.failed_items,
+        progress_percent=progress,
+        frequency=batch.frequency,
+        duration_months=batch.duration_months,
+        error_summary=batch.error_summary,
+        results=items,
+        created_at=batch.created_at,
+        updated_at=batch.updated_at,
     )
 
 
