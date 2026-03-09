@@ -101,6 +101,9 @@ class LotAssignRequest(BaseModel):
     lot_id: UUID
     purchase_date: date
     total_value: Decimal = Field(..., gt=0)
+    down_payment: Optional[Decimal] = Field(None, ge=0)
+    total_installments: int = Field(1, ge=1, le=360)
+    annual_adjustment_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Fixed annual rate on top of IPCA, default 0.05 (5%)")
     payment_plan: Optional[Dict[str, Any]] = Field(
         None,
         description="Installment details, e.g. {'installments': 120, 'first_due': '2024-03-01'}",
@@ -116,6 +119,13 @@ class ClientLotResponse(BaseModel):
     lot_id: UUID
     purchase_date: date
     total_value: Decimal
+    down_payment: Optional[Decimal] = None
+    total_installments: int = 1
+    current_cycle: int = 1
+    current_installment_value: Optional[Decimal] = None
+    annual_adjustment_rate: Optional[Decimal] = None
+    last_adjustment_date: Optional[date] = None
+    last_cycle_paid_at: Optional[date] = None
     payment_plan: Optional[Dict[str, Any]] = None
     status: str
     created_at: datetime

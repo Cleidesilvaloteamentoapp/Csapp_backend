@@ -16,6 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import get_company_admin
 from app.models.user import Profile
+from app.models.client import Client
+from app.models.boleto import Boleto
+from app.models.enums import ClientStatus, BoletoStatus
+from sqlalchemy import select
+from datetime import date as dt_date
 from app.schemas.sicredi import (
     AlterarDescontoAPIRequest,
     AlterarJurosAPIRequest,
@@ -160,14 +165,48 @@ async def criar_boleto(
     admin: Profile = Depends(get_company_admin),
 ):
     """Create a new boleto (traditional or hybrid with Pix QR Code)."""
-    client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+    sicredi_client = await sicredi_service.get_sicredi_client(db, admin.company_id)
 
+    # Step 1: Get or create client
+    if payload.client_id:
+        # Use existing client
+        stmt = select(Client).where(
+            Client.id == payload.client_id,
+            Client.company_id == admin.company_id
+        )
+        result_db = await db.execute(stmt)
+        client_record = result_db.scalar_one_or_none()
+        
+        if not client_record:
+            raise HTTPException(status_code=404, detail="Client not found")
+    else:
+        # Create new client from pagador data
+        client_record = Client(
+            company_id=admin.company_id,
+            email=payload.pagador.email or f"{payload.pagador.documento}@temp.email",
+            full_name=payload.pagador.nome,
+            cpf_cnpj=payload.pagador.documento,
+            phone=payload.pagador.telefone or "00000000000",
+            address={
+                "endereco": payload.pagador.endereco,
+                "cidade": payload.pagador.cidade,
+                "uf": payload.pagador.uf,
+                "cep": payload.pagador.cep,
+            },
+            status=ClientStatus.ACTIVE,
+            created_by=admin.id,
+        )
+        db.add(client_record)
+        await db.flush()
+        logger.info(f"Created new client {client_record.id} for boleto")
+
+    # Step 2: Call Sicredi API to create boleto
     pagador = _build_pagador(payload.pagador)
     beneficiario = _build_beneficiario_final(payload.beneficiario_final) if payload.beneficiario_final else None
 
     boleto_req = CriarBoletoRequest(
         tipoCobranca=payload.tipo_cobranca,
-        codigoBeneficiario=client.credentials.codigo_beneficiario,
+        codigoBeneficiario=sicredi_client.credentials.codigo_beneficiario,
         pagador=pagador,
         especieDocumento=payload.especie_documento,
         dataVencimento=payload.data_vencimento,
@@ -196,13 +235,42 @@ async def criar_boleto(
     )
 
     try:
-        result = await client.boletos.criar(boleto_req)
+        result = await sicredi_client.boletos.criar(boleto_req)
         await sicredi_service.persist_token_cache(db, admin.company_id)
     except SicrediError as exc:
         logger.error("sicredi_criar_boleto_error", detail=exc.detail)
         raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
 
+    # Step 3: Persist boleto record in database
+    boleto_record = Boleto(
+        company_id=admin.company_id,
+        client_id=client_record.id,
+        nosso_numero=result.nossoNumero,
+        seu_numero=payload.seu_numero,
+        linha_digitavel=result.linhaDigitavel,
+        codigo_barras=result.codigoBarras,
+        tipo_cobranca=payload.tipo_cobranca,
+        especie_documento=payload.especie_documento,
+        data_vencimento=payload.data_vencimento,
+        data_emissao=dt_date.today(),
+        valor=payload.valor,
+        status=BoletoStatus.NORMAL,
+        txid=result.txid,
+        qr_code=result.qrCode,
+        invoice_id=payload.invoice_id,
+        pagador_data=payload.pagador.model_dump(),
+        raw_response=result.model_dump(mode="json"),
+        created_by=admin.id,
+    )
+    db.add(boleto_record)
+    await db.commit()
+    await db.refresh(boleto_record)
+    
+    logger.info(f"Boleto {boleto_record.nosso_numero} created and persisted for client {client_record.id}")
+
     return CriarBoletoAPIResponse(
+        boleto_id=boleto_record.id,
+        client_id=client_record.id,
         linha_digitavel=result.linhaDigitavel,
         codigo_barras=result.codigoBarras,
         nosso_numero=result.nossoNumero,

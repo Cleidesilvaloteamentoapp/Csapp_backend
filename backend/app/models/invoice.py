@@ -42,6 +42,7 @@ class Invoice(Base, TenantMixin, TimestampMixin):
 
     # Relationships
     client_lot = relationship("ClientLot", back_populates="invoices", lazy="selectin")
+    boletos = relationship("Boleto", back_populates="invoice", lazy="selectin")
 
     def __repr__(self) -> str:
         return f"<Invoice #{self.installment_number} due={self.due_date} status={self.status.value}>"

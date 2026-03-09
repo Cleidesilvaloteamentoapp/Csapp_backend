@@ -71,7 +71,10 @@ async def create_client(
         full_name=data.full_name,
         cpf_cnpj=data.cpf_cnpj,
         phone=data.phone,
+        contract_number=data.contract_number,
+        matricula=data.matricula,
         address=data.address,
+        notes=data.notes,
         status=ClientStatus.ACTIVE,
         created_by=creator_id,
     )

@@ -78,8 +78,12 @@ def check_overdue_invoices(self):
 
 
 async def _generate_monthly_invoices_async():
-    """Generate next month's invoices for active client_lots."""
-    from sqlalchemy import select
+    """Generate next month's invoices for active client_lots.
+
+    CYCLE LOCK RULE: New invoices for a new 12-month cycle are only
+    generated after the previous cycle is fully paid.
+    """
+    from sqlalchemy import select, func
     from app.core.database import async_session_factory
     from app.models.client_lot import ClientLot
     from app.models.enums import ClientLotStatus, InvoiceStatus
@@ -91,31 +95,55 @@ async def _generate_monthly_invoices_async():
         )
         active_lots = rows.scalars().all()
         created = 0
+        skipped_cycle_lock = 0
 
         for cl in active_lots:
-            plan = cl.payment_plan or {}
-            total_installments = int(plan.get("installments", 1))
+            total_installments = cl.total_installments or 1
 
-            # Count existing invoices
-            inv_count = await db.execute(
-                select(Invoice).where(Invoice.client_lot_id == cl.id)
+            # Count existing non-cancelled invoices
+            inv_rows = await db.execute(
+                select(Invoice).where(
+                    Invoice.client_lot_id == cl.id,
+                    Invoice.status != InvoiceStatus.CANCELLED,
+                )
             )
-            existing = len(inv_count.scalars().all())
+            all_invoices = list(inv_rows.scalars().all())
+            existing = len(all_invoices)
 
             if existing >= total_installments:
                 continue  # All installments already generated
 
+            # CYCLE LOCK: check if current cycle's invoices are all paid
+            cycle_size = 12
+            current_cycle_start = (cl.current_cycle - 1) * cycle_size
+            current_cycle_end = cl.current_cycle * cycle_size
+
+            if existing >= current_cycle_end:
+                # Need to start a new cycle — check if current cycle is fully paid
+                cycle_invoices = [
+                    inv for inv in all_invoices
+                    if current_cycle_start < inv.installment_number <= current_cycle_end
+                ]
+                unpaid = [inv for inv in cycle_invoices if inv.status != InvoiceStatus.PAID]
+                if unpaid:
+                    skipped_cycle_lock += 1
+                    continue  # BLOCKED: previous cycle not fully paid
+
             # Find last invoice due date
             last_inv = await db.execute(
                 select(Invoice)
-                .where(Invoice.client_lot_id == cl.id)
+                .where(
+                    Invoice.client_lot_id == cl.id,
+                    Invoice.status != InvoiceStatus.CANCELLED,
+                )
                 .order_by(Invoice.due_date.desc())
                 .limit(1)
             )
             last = last_inv.scalar_one_or_none()
             next_due = (last.due_date + timedelta(days=30)) if last else date.today() + timedelta(days=30)
 
-            installment_value = cl.total_value / total_installments
+            # Use current_installment_value if set (after adjustment), else calculate
+            installment_value = cl.current_installment_value or (cl.total_value / total_installments)
 
             invoice = Invoice(
                 company_id=cl.company_id,
@@ -129,7 +157,11 @@ async def _generate_monthly_invoices_async():
             created += 1
 
         await db.commit()
-        logger.info("monthly_invoices_generated", count=created)
+        logger.info(
+            "monthly_invoices_generated",
+            count=created,
+            skipped_cycle_lock=skipped_cycle_lock,
+        )
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=300)

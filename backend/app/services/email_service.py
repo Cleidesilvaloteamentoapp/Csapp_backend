@@ -118,3 +118,39 @@ async def send_service_order_update(to: str, name: str, order_id: str, new_statu
     <p><strong>Novo status:</strong> {new_status}</p>
     """
     await send_email(to=to, subject="OS atualizada", html=html)
+
+
+async def send_admin_alert(company_id: str, subject: str, message: str) -> None:
+    """Send an alert email to all admins of a company.
+
+    In production, this should look up admin emails from the database.
+    For now, it sends to the configured SMTP_FROM_EMAIL as a fallback.
+    """
+    from sqlalchemy import select
+    from app.core.database import async_session_factory
+    from app.models.user import Profile
+    from app.models.enums import UserRole
+
+    admin_emails = []
+    try:
+        async with async_session_factory() as db:
+            rows = await db.execute(
+                select(Profile.email).where(
+                    Profile.company_id == company_id,
+                    Profile.role == UserRole.COMPANY_ADMIN,
+                )
+            )
+            admin_emails = [r[0] for r in rows.all() if r[0]]
+    except Exception as exc:
+        logger.warning("admin_email_lookup_failed", company_id=company_id, error=str(exc))
+
+    if not admin_emails:
+        admin_emails = [settings.SMTP_FROM_EMAIL]
+
+    html = f"""
+    <h2>Alerta Administrativo</h2>
+    <div style="padding: 16px; background: #fff3cd; border-left: 4px solid #ffc107; margin: 16px 0;">
+        {message}
+    </div>
+    """
+    await send_email(to=admin_emails, subject=f"[ADMIN] {subject}", html=html)

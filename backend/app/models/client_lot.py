@@ -6,7 +6,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Date, Enum as SAEnum, ForeignKey, Numeric
+from sqlalchemy import Boolean, Date, Enum as SAEnum, ForeignKey, Integer, Numeric, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,19 @@ class ClientLot(Base, TenantMixin, TimestampMixin):
     )
     purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
     total_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    down_payment: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True, default=0)
+    total_installments: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    current_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    current_installment_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    annual_adjustment_rate: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(6, 4), nullable=True, default=Decimal("0.05"),
+        comment="Fixed annual rate (default 5%) added on top of IPCA"
+    )
+    last_adjustment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    last_cycle_paid_at: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True,
+        comment="Date when last 12-installment cycle was fully paid"
+    )
     payment_plan: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     status: Mapped[ClientLotStatus] = mapped_column(
         SAEnum(ClientLotStatus, name="client_lot_status", create_constraint=False),

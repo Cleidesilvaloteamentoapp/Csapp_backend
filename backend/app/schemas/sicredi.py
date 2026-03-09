@@ -124,6 +124,11 @@ class CriarBoletoAPIRequest(BaseModel):
     data_vencimento: date
     valor: Decimal = Field(..., gt=0)
     seu_numero: str = Field(..., max_length=15, description="Internal control number")
+    
+    # Client association: provide EITHER client_id (existing) OR create_client (new)
+    client_id: Optional[UUID] = Field(None, description="Existing client UUID to link boleto")
+    create_client: bool = Field(False, description="Create new client from pagador data")
+    invoice_id: Optional[UUID] = Field(None, description="Optional invoice to link")
 
     # Optional
     beneficiario_final: Optional[BeneficiarioFinalRequest] = None
@@ -146,11 +151,22 @@ class CriarBoletoAPIRequest(BaseModel):
     informativos: Optional[list[str]] = None
     mensagens: Optional[list[str]] = None
     postar_boleto: Optional[str] = None
+    
+    @model_validator(mode="after")
+    def validate_client_association(self):
+        """Ensure either client_id or create_client is provided."""
+        if not self.client_id and not self.create_client:
+            raise ValueError("Must provide either client_id (existing client) or create_client=true (new client)")
+        if self.client_id and self.create_client:
+            raise ValueError("Cannot specify both client_id and create_client. Choose one.")
+        return self
 
 
 class CriarBoletoAPIResponse(BaseModel):
     """API response after boleto creation."""
 
+    boleto_id: UUID
+    client_id: UUID
     linha_digitavel: Optional[str] = None
     codigo_barras: Optional[str] = None
     nosso_numero: Optional[str] = None

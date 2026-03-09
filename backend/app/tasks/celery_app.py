@@ -13,6 +13,7 @@ celery = Celery(
     include=[
         "app.tasks.invoice_tasks",
         "app.tasks.notification_tasks",
+        "app.tasks.adjustment_tasks",
     ],
 )
 
@@ -46,5 +47,13 @@ celery.conf.beat_schedule = {
     "sync-payment-status": {
         "task": "app.tasks.invoice_tasks.sync_payment_status",
         "schedule": crontab(hour="*/4", minute=30),  # Every 4 hours
+    },
+    "apply-annual-adjustments": {
+        "task": "app.tasks.adjustment_tasks.apply_annual_adjustments",
+        "schedule": crontab(day_of_month=1, hour=2, minute=0),  # 1st of month, 02:00
+    },
+    "send-admin-alerts-daily": {
+        "task": "app.tasks.adjustment_tasks.send_admin_alerts",
+        "schedule": crontab(hour=7, minute=30),  # 07:30 daily
     },
 }

@@ -4,10 +4,11 @@ from typing import Optional
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import log_audit
 from app.core.database import get_db
 from app.core.deps import get_company_admin
 from app.models.client_lot import ClientLot
@@ -44,11 +45,19 @@ async def list_clients(
 @router.post("/", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
 async def create_client(
     data: ClientCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):
     """Create a new client. Optionally creates an Asaas customer."""
     client = await client_service.create_client(db, admin.company_id, admin.id, data)
+
+    await log_audit(
+        db, user_id=admin.id, company_id=admin.company_id,
+        table_name="clients", operation="CREATE",
+        resource_id=str(client.id), detail=f"Created client {client.full_name}",
+        ip_address=request.client.host if request.client else None,
+    )
 
     # Create Asaas customer in background-safe manner
     try:
@@ -81,22 +90,37 @@ async def get_client(
 async def update_client(
     client_id: UUID,
     data: ClientUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):
     """Update client data."""
     client = await client_service.update_client(db, admin.company_id, client_id, data)
+    await log_audit(
+        db, user_id=admin.id, company_id=admin.company_id,
+        table_name="clients", operation="UPDATE",
+        resource_id=str(client_id),
+        detail=f"Updated fields: {[k for k,v in data.model_dump(exclude_unset=True).items()]}",
+        ip_address=request.client.host if request.client else None,
+    )
     return ClientResponse.model_validate(client)
 
 
 @router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_client(
     client_id: UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):
     """Deactivate (soft-delete) a client."""
     await client_service.deactivate_client(db, admin.company_id, client_id)
+    await log_audit(
+        db, user_id=admin.id, company_id=admin.company_id,
+        table_name="clients", operation="DELETE",
+        resource_id=str(client_id), detail="Client deactivated",
+        ip_address=request.client.host if request.client else None,
+    )
     return None
 
 

@@ -15,7 +15,10 @@ class ClientCreate(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=255)
     cpf_cnpj: str = Field(..., min_length=11, max_length=20)
     phone: str = Field(..., min_length=10, max_length=20)
+    contract_number: Optional[str] = Field(None, max_length=50)
+    matricula: Optional[str] = Field(None, max_length=50)
     address: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
     create_access: bool = Field(False, description="Create login credentials for the client")
     password: Optional[str] = Field(None, min_length=8, max_length=128)
 
@@ -27,8 +30,11 @@ class ClientUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=2, max_length=255)
     cpf_cnpj: Optional[str] = Field(None, min_length=11, max_length=20)
     phone: Optional[str] = Field(None, min_length=10, max_length=20)
+    contract_number: Optional[str] = Field(None, max_length=50)
+    matricula: Optional[str] = Field(None, max_length=50)
     address: Optional[Dict[str, Any]] = None
-    status: Optional[str] = Field(None, pattern=r"^(active|inactive|defaulter)$")
+    notes: Optional[str] = None
+    status: Optional[str] = Field(None, pattern=r"^(ACTIVE|INACTIVE|DEFAULTER|IN_NEGOTIATION|RESCINDED)$")
 
 
 class ClientResponse(BaseModel):
@@ -41,8 +47,11 @@ class ClientResponse(BaseModel):
     full_name: str
     cpf_cnpj: str
     phone: str
+    contract_number: Optional[str] = None
+    matricula: Optional[str] = None
     address: Optional[Dict[str, Any]] = None
     documents: Optional[List[Any]] = None
+    notes: Optional[str] = None
     status: str
     asaas_customer_id: Optional[str] = None
     created_by: Optional[UUID] = None

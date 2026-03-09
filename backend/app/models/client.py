@@ -5,7 +5,7 @@ from typing import Optional
 import uuid
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,8 +29,11 @@ class Client(Base, TenantMixin, TimestampMixin):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     cpf_cnpj: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    contract_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True, index=True)
+    matricula: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     address: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     documents: Mapped[Optional[list]] = mapped_column(JSONB, default=list)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[ClientStatus] = mapped_column(
         SAEnum(ClientStatus, name="client_status", create_constraint=False),
         default=ClientStatus.ACTIVE,
@@ -46,6 +49,7 @@ class Client(Base, TenantMixin, TimestampMixin):
     profile = relationship("Profile", foreign_keys=[profile_id], lazy="selectin")
     creator = relationship("Profile", foreign_keys=[created_by], lazy="selectin")
     client_lots = relationship("ClientLot", back_populates="client", lazy="selectin")
+    boletos = relationship("Boleto", back_populates="client", lazy="selectin")
 
     def __repr__(self) -> str:
         return f"<Client {self.full_name}>"

@@ -5,11 +5,17 @@ from fastapi import APIRouter
 
 from app.api.v1 import auth, companies, webhooks, webhooks_sicredi
 from app.api.v1.admin import clients as admin_clients
+from app.api.v1.admin import contract_history as admin_contract_history
 from app.api.v1.admin import dashboard as admin_dashboard
 from app.api.v1.admin import financial as admin_financial
 from app.api.v1.admin import lots as admin_lots
+from app.api.v1.admin import renegotiations as admin_renegotiations
+from app.api.v1.admin import reports as admin_reports
+from app.api.v1.admin import rescissions as admin_rescissions
+from app.api.v1.admin import segunda_via as admin_segunda_via
 from app.api.v1.admin import services as admin_services
 from app.api.v1.admin import sicredi as admin_sicredi
+from app.api.v1.admin import boletos as admin_boletos
 from app.api.v1.client import dashboard as client_dashboard
 from app.api.v1.client import documents as client_documents
 from app.api.v1.client import invoices as client_invoices
@@ -37,6 +43,12 @@ api_router.include_router(admin_lots.dev_router, prefix="/admin")
 api_router.include_router(admin_financial.router, prefix="/admin")
 api_router.include_router(admin_services.router, prefix="/admin")
 api_router.include_router(admin_sicredi.router, prefix="/admin")
+api_router.include_router(admin_boletos.router, prefix="/admin")
+api_router.include_router(admin_contract_history.router, prefix="/admin")
+api_router.include_router(admin_renegotiations.router, prefix="/admin")
+api_router.include_router(admin_rescissions.router, prefix="/admin")
+api_router.include_router(admin_segunda_via.router, prefix="/admin")
+api_router.include_router(admin_reports.router, prefix="/admin")
 
 # Client portal
 api_router.include_router(client_dashboard.router, prefix="/client")

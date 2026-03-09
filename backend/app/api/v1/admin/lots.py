@@ -7,10 +7,11 @@ from datetime import date, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import log_audit
 from app.core.database import get_db
 from app.core.deps import get_company_admin
 from app.models.client import Client
@@ -208,6 +209,7 @@ async def update_lot(
 @router.post("/assign", response_model=ClientLotResponse, status_code=status.HTTP_201_CREATED)
 async def assign_lot(
     data: LotAssignRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):
@@ -230,14 +232,26 @@ async def assign_lot(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Create client_lot
+    # Calculate installment value considering down payment
+    plan = data.payment_plan or {}
+    num_installments = data.total_installments or int(plan.get("installments", 1))
+    down_payment = data.down_payment or Decimal("0")
+    financed_value = data.total_value - down_payment
+    installment_value = financed_value / num_installments if num_installments > 0 else financed_value
+
+    # Create client_lot with new contract fields
     cl = ClientLot(
         company_id=cid,
         client_id=data.client_id,
         lot_id=data.lot_id,
         purchase_date=data.purchase_date,
         total_value=data.total_value,
-        payment_plan=data.payment_plan or {},
+        down_payment=down_payment,
+        total_installments=num_installments,
+        current_cycle=1,
+        current_installment_value=installment_value,
+        annual_adjustment_rate=data.annual_adjustment_rate or Decimal("0.05"),
+        payment_plan=plan,
         status=ClientLotStatus.ACTIVE,
     )
     db.add(cl)
@@ -247,14 +261,12 @@ async def assign_lot(
     lot.status = LotStatus.SOLD
     await db.flush()
 
-    # Generate invoices
-    plan = data.payment_plan or {}
-    num_installments = int(plan.get("installments", 1))
+    # Generate first cycle invoices (max 12 per cycle)
     first_due_str = plan.get("first_due")
     first_due = date.fromisoformat(first_due_str) if first_due_str else data.purchase_date + timedelta(days=30)
-    installment_value = data.total_value / num_installments
+    first_cycle_count = min(num_installments, 12)
 
-    for i in range(num_installments):
+    for i in range(first_cycle_count):
         due = first_due + timedelta(days=30 * i)
         invoice = Invoice(
             company_id=cid,
@@ -283,4 +295,14 @@ async def assign_lot(
         db.add(invoice)
 
     await db.flush()
+
+    await log_audit(
+        db, user_id=admin.id, company_id=cid,
+        table_name="client_lots", operation="CREATE",
+        resource_id=str(cl.id),
+        detail=f"Lot {lot.lot_number} assigned to client {client.full_name}. "
+               f"{first_cycle_count} invoices generated (cycle 1/{math.ceil(num_installments/12)})",
+        ip_address=request.client.host if request.client else None,
+    )
+
     return ClientLotResponse.model_validate(cl)

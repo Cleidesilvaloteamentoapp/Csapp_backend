@@ -16,8 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.enums import InvoiceStatus
+from app.models.enums import InvoiceStatus, BoletoStatus
 from app.models.invoice import Invoice
+from app.models.boleto import Boleto
 from app.schemas.sicredi import WebhookEventResponse
 from app.services.sicredi.schemas import WebhookEventPayload
 from app.utils.logging import get_logger
@@ -67,41 +68,75 @@ async def sicredi_webhook(
         id_evento=event.idEventoWebhook,
     )
 
-    # Look up the invoice by matching barcode or nossoNumero stored in the invoice
-    # The nossoNumero is typically stored in the invoice's barcode or a dedicated field
-    result = await db.execute(
+    # Look up the boleto by nossoNumero
+    result_boleto = await db.execute(
+        select(Boleto).where(Boleto.nosso_numero == nosso_numero)
+    )
+    boleto = result_boleto.scalar_one_or_none()
+    
+    # Also look up invoice by matching barcode (legacy support)
+    result_invoice = await db.execute(
         select(Invoice).where(Invoice.barcode == nosso_numero)
     )
-    invoice = result.scalar_one_or_none()
+    invoice = result_invoice.scalar_one_or_none()
 
-    if not invoice:
-        logger.warning("sicredi_webhook_invoice_not_found", nosso_numero=nosso_numero)
+    if not boleto and not invoice:
+        logger.warning("sicredi_webhook_boleto_not_found", nosso_numero=nosso_numero)
         return WebhookEventResponse(
             status="ignored",
             nosso_numero=nosso_numero,
             movimento=movimento,
-            detail="Invoice not found for this nossoNumero",
+            detail="Boleto or invoice not found for this nossoNumero",
         )
 
     # Process liquidation events
     if movimento and "LIQUIDACAO" in movimento.upper():
-        invoice.status = InvoiceStatus.PAID
-        invoice.paid_at = datetime.now(timezone.utc)
-        await db.flush()
+        # Update boleto status
+        if boleto:
+            boleto.status = BoletoStatus.LIQUIDADO
+            boleto.data_liquidacao = datetime.now(timezone.utc).date()
+            boleto.valor_liquidacao = event.valorLiquidacao
+            await db.flush()
+            
+            logger.info(
+                "sicredi_webhook_boleto_paid",
+                boleto_id=str(boleto.id),
+                nosso_numero=nosso_numero,
+                valor=str(event.valorLiquidacao),
+            )
+            
+            # If boleto is linked to an invoice, update invoice too
+            if boleto.invoice_id:
+                result_linked_invoice = await db.execute(
+                    select(Invoice).where(Invoice.id == boleto.invoice_id)
+                )
+                linked_invoice = result_linked_invoice.scalar_one_or_none()
+                if linked_invoice:
+                    linked_invoice.status = InvoiceStatus.PAID
+                    linked_invoice.paid_at = datetime.now(timezone.utc)
+                    await db.flush()
+        
+        # Update invoice status (legacy support)
+        if invoice:
+            invoice.status = InvoiceStatus.PAID
+            invoice.paid_at = datetime.now(timezone.utc)
+            await db.flush()
 
-        logger.info(
-            "sicredi_webhook_invoice_paid",
-            invoice_id=str(invoice.id),
-            nosso_numero=nosso_numero,
-            valor=str(event.valorLiquidacao),
-        )
+            logger.info(
+                "sicredi_webhook_invoice_paid",
+                invoice_id=str(invoice.id),
+                nosso_numero=nosso_numero,
+                valor=str(event.valorLiquidacao),
+            )
+        
+        await db.commit()
 
         return WebhookEventResponse(
             status="processed",
             nosso_numero=nosso_numero,
             movimento=movimento,
             valor_liquidacao=event.valorLiquidacao,
-            invoice_id=str(invoice.id),
+            invoice_id=str(invoice.id) if invoice else None,
         )
 
     logger.info("sicredi_webhook_unhandled_event", movimento=movimento)
