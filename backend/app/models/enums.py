@@ -100,3 +100,52 @@ class RescissionStatus(str, enum.Enum):
     APPROVED = "APPROVED"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
+
+
+class DocumentType(str, enum.Enum):
+    RG = "RG"
+    CPF = "CPF"
+    COMPROVANTE_RESIDENCIA = "COMPROVANTE_RESIDENCIA"
+    CNH = "CNH"
+    CONTRATO = "CONTRATO"
+    OUTROS = "OUTROS"
+
+
+class DocumentStatus(str, enum.Enum):
+    PENDING_REVIEW = "PENDING_REVIEW"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class ServiceRequestStatus(str, enum.Enum):
+    OPEN = "OPEN"
+    IN_PROGRESS = "IN_PROGRESS"
+    WAITING_CLIENT = "WAITING_CLIENT"
+    RESOLVED = "RESOLVED"
+    CLOSED = "CLOSED"
+
+
+class ServiceRequestPriority(str, enum.Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    URGENT = "URGENT"
+
+
+class ServiceRequestType(str, enum.Enum):
+    MANUTENCAO = "MANUTENCAO"
+    SUPORTE = "SUPORTE"
+    FINANCEIRO = "FINANCEIRO"
+    DOCUMENTACAO = "DOCUMENTACAO"
+    OUTROS = "OUTROS"
+
+
+class NotificationType(str, enum.Enum):
+    BOLETO_EMITIDO = "BOLETO_EMITIDO"
+    BOLETO_VENCIDO = "BOLETO_VENCIDO"
+    PAGAMENTO_CONFIRMADO = "PAGAMENTO_CONFIRMADO"
+    DOCUMENTO_APROVADO = "DOCUMENTO_APROVADO"
+    DOCUMENTO_REJEITADO = "DOCUMENTO_REJEITADO"
+    SOLICITACAO_ATUALIZADA = "SOLICITACAO_ATUALIZADA"
+    GERAL = "GERAL"

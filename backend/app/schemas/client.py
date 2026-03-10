@@ -59,3 +59,29 @@ class ClientResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ClientProfileResponse(BaseModel):
+    """Client-facing profile response (no internal fields like asaas_customer_id)."""
+
+    id: UUID
+    profile_id: Optional[UUID] = None
+    full_name: str
+    cpf_cnpj: str
+    email: str
+    phone: str
+    contract_number: Optional[str] = None
+    matricula: Optional[str] = None
+    address: Optional[Dict[str, Any]] = None
+    status: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ClientProfileUpdate(BaseModel):
+    """Payload for client self-update (limited fields)."""
+
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, min_length=10, max_length=20)
+    address: Optional[Dict[str, Any]] = None

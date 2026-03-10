@@ -16,11 +16,16 @@ from app.api.v1.admin import segunda_via as admin_segunda_via
 from app.api.v1.admin import services as admin_services
 from app.api.v1.admin import sicredi as admin_sicredi
 from app.api.v1.admin import boletos as admin_boletos
+from app.api.v1.admin import documents as admin_documents
+from app.api.v1.admin import service_requests as admin_service_requests
 from app.api.v1.client import dashboard as client_dashboard
 from app.api.v1.client import documents as client_documents
 from app.api.v1.client import invoices as client_invoices
 from app.api.v1.client import referrals as client_referrals
 from app.api.v1.client import boletos as client_boletos
+from app.api.v1.client import notifications as client_notifications
+from app.api.v1.client import profile as client_profile
+from app.api.v1.client import service_requests as client_service_requests
 from app.api.v1.client import services as client_services
 
 api_router = APIRouter()
@@ -49,6 +54,8 @@ api_router.include_router(admin_renegotiations.router, prefix="/admin")
 api_router.include_router(admin_rescissions.router, prefix="/admin")
 api_router.include_router(admin_segunda_via.router, prefix="/admin")
 api_router.include_router(admin_reports.router, prefix="/admin")
+api_router.include_router(admin_documents.router, prefix="/admin")
+api_router.include_router(admin_service_requests.router, prefix="/admin")
 
 # Client portal
 api_router.include_router(client_dashboard.router, prefix="/client")
@@ -57,3 +64,6 @@ api_router.include_router(client_services.router, prefix="/client")
 api_router.include_router(client_documents.router, prefix="/client")
 api_router.include_router(client_boletos.router, prefix="/client")
 api_router.include_router(client_referrals.router, prefix="/client")
+api_router.include_router(client_profile.router, prefix="/client")
+api_router.include_router(client_service_requests.router, prefix="/client")
+api_router.include_router(client_notifications.router, prefix="/client")

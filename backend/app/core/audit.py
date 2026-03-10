@@ -23,6 +23,8 @@ AUDITED_TABLES = frozenset({
     "contract_history",
     "sicredi_credentials",
     "profiles",
+    "client_documents",
+    "service_requests",
 })
 
 

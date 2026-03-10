@@ -5,18 +5,21 @@ Allows authenticated clients to view their boletos and download PDFs
 directly from the platform, without needing to contact the admin.
 """
 
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_client_user
+from app.models.boleto import Boleto
 from app.models.client import Client
 from app.models.invoice import Invoice
 from app.models.client_lot import ClientLot
 from app.models.user import Profile
+from app.schemas.boleto import BoletoListResponse
 from app.schemas.sicredi import ConsultaBoletoAPIResponse
 from app.services import segunda_via_service, sicredi_service
 from app.services.sicredi.exceptions import SicrediError
@@ -28,10 +31,46 @@ router = APIRouter(prefix="/boletos", tags=["Client Boletos"])
 
 
 # ---------------------------------------------------------------------------
-# Segunda Via (Second Copy) – MUST be before {nosso_numero} catch-all
+# Local DB listing – MUST be before {nosso_numero} catch-all
 # ---------------------------------------------------------------------------
 
 async def _get_client_for_user(db: AsyncSession, user: Profile) -> Client:
+    row = await db.execute(
+        select(Client).where(Client.profile_id == user.id, Client.company_id == user.company_id)
+    )
+    client = row.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client profile not found")
+    return client
+
+
+@router.get("/", response_model=list[BoletoListResponse])
+async def list_my_boletos(
+    status: Optional[str] = Query(None, pattern=r"^(NORMAL|LIQUIDADO|VENCIDO|CANCELADO|NEGATIVADO|PENDING_APPROVAL)$"),
+    db: AsyncSession = Depends(get_db),
+    user: Profile = Depends(get_client_user),
+):
+    """List all boletos from the local database for the authenticated client."""
+    client = await _get_client_for_user(db, user)
+
+    query = (
+        select(Boleto)
+        .where(Boleto.client_id == client.id, Boleto.company_id == user.company_id)
+    )
+    if status:
+        query = query.where(Boleto.status == status)
+
+    query = query.order_by(Boleto.data_vencimento.desc())
+    rows = await db.execute(query)
+    return [BoletoListResponse.model_validate(b) for b in rows.scalars().all()]
+
+
+# ---------------------------------------------------------------------------
+# Segunda Via (Second Copy) – MUST be before {nosso_numero} catch-all
+# ---------------------------------------------------------------------------
+
+
+async def _get_client_for_user_sv(db: AsyncSession, user: Profile) -> Client:
     row = await db.execute(
         select(Client).where(Client.profile_id == user.id, Client.company_id == user.company_id)
     )
@@ -48,7 +87,7 @@ async def preview_segunda_via(
     user: Profile = Depends(get_client_user),
 ):
     """Preview corrected amount for an overdue invoice (penalty + interest)."""
-    client = await _get_client_for_user(db, user)
+    client = await _get_client_for_user_sv(db, user)
 
     # Verify the invoice belongs to this client
     row = await db.execute(
@@ -90,7 +129,7 @@ async def issue_segunda_via(
     user: Profile = Depends(get_client_user),
 ):
     """Issue a second copy boleto with automatic penalty/interest calculation."""
-    client = await _get_client_for_user(db, user)
+    client = await _get_client_for_user_sv(db, user)
 
     # Verify the invoice belongs to this client
     row = await db.execute(

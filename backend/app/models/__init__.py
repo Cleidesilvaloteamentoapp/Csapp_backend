@@ -15,5 +15,8 @@ from app.models.referral import Referral  # noqa: F401
 from app.models.renegotiation import Renegotiation  # noqa: F401
 from app.models.rescission import Rescission  # noqa: F401
 from app.models.service import ServiceOrder, ServiceType  # noqa: F401
+from app.models.client_document import ClientDocument  # noqa: F401
+from app.models.notification import Notification  # noqa: F401
+from app.models.service_request import ServiceRequest, ServiceRequestMessage  # noqa: F401
 from app.models.sicredi_credential import SicrediCredential  # noqa: F401
 from app.models.user import Profile  # noqa: F401
