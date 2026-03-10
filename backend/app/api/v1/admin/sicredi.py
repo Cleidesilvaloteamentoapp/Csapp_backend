@@ -57,6 +57,7 @@ from app.schemas.batch import (
     BatchItemResult,
 )
 from app.tasks.batch_tasks import process_batch_creation, process_batch_operation
+from app.core.audit import log_audit
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -339,6 +340,18 @@ async def batch_criar_boletos(
     await db.commit()
     await db.refresh(batch)
 
+    # Audit log
+    await log_audit(
+        db=db,
+        user_id=admin.id,
+        company_id=admin.company_id,
+        table_name="batch_operations",
+        operation="BATCH_CREATE",
+        resource_id=str(batch.id),
+        detail=f"Batch creation: {num_installments} boletos, client {payload.client_id}, frequency {payload.frequency}, duration {payload.duration_months} months",
+    )
+    await db.commit()
+
     # Enqueue Celery task
     process_batch_creation.delay(str(batch.id), str(admin.company_id))
 
@@ -403,6 +416,18 @@ async def batch_operacao_boletos(
     db.add(batch)
     await db.commit()
     await db.refresh(batch)
+
+    # Audit log
+    await log_audit(
+        db=db,
+        user_id=admin.id,
+        company_id=admin.company_id,
+        table_name="batch_operations",
+        operation=f"BATCH_{payload.action}",
+        resource_id=str(batch.id),
+        detail=f"Batch operation: {payload.action} on {len(payload.nosso_numeros)} boletos (nosso_numeros: {', '.join(payload.nosso_numeros[:5])}{'...' if len(payload.nosso_numeros) > 5 else ''})",
+    )
+    await db.commit()
 
     # Enqueue Celery task
     process_batch_operation.delay(str(batch.id), str(admin.company_id))

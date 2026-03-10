@@ -17,6 +17,7 @@ AUDITED_TABLES = frozenset({
     "client_lots",
     "invoices",
     "boletos",
+    "batch_operations",
     "renegotiations",
     "rescissions",
     "contract_history",

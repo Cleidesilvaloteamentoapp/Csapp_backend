@@ -148,7 +148,7 @@ async def _process_batch_creation_async(batch_id: str, company_id: str):
 
         for i in range(num_installments):
             due_date = first_due + relativedelta(months=interval * i)
-            seu_numero = f"BATCH-{batch_id[:8]}-{i + 1:03d}"
+            seu_numero = f"BAT{batch_id[-4:]}{i + 1:03d}"
 
             boleto_req = CriarBoletoRequest(
                 tipoCobranca=input_data.get("tipo_cobranca", "NORMAL"),
