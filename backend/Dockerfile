@@ -15,14 +15,12 @@ WORKDIR /app
 
 COPY --from=builder /install /usr/local
 COPY backend/ .
+COPY backend/entrypoint.sh /entrypoint.sh
 
-RUN chown -R appuser:appuser /app
+RUN chmod +x /entrypoint.sh && chown -R appuser:appuser /app
 
 USER appuser
 
-EXPOSE ${PORT:-8000}
+EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health')" || exit 1
-
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]
+ENTRYPOINT ["/entrypoint.sh"]
