@@ -3,7 +3,7 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # Stage 2: Production
@@ -14,7 +14,7 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuse
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
-COPY . .
+COPY backend/ .
 
 RUN chown -R appuser:appuser /app
 
