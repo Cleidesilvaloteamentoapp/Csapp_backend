@@ -45,10 +45,6 @@ celery.conf.beat_schedule = {
         "task": "app.tasks.notification_tasks.send_payment_reminders",
         "schedule": crontab(hour=9, minute=0),  # 09:00 daily
     },
-    "sync-payment-status": {
-        "task": "app.tasks.invoice_tasks.sync_payment_status",
-        "schedule": crontab(hour="*/4", minute=30),  # Every 4 hours
-    },
     "apply-annual-adjustments": {
         "task": "app.tasks.adjustment_tasks.apply_annual_adjustments",
         "schedule": crontab(day_of_month=1, hour=2, minute=0),  # 1st of month, 02:00

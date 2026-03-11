@@ -83,7 +83,7 @@ async def download_invoice_pdf(
     db: AsyncSession = Depends(get_db),
     user: Profile = Depends(get_client_user),
 ):
-    """Redirect to the Asaas payment URL for PDF download."""
+    """Redirect to the payment URL for PDF download."""
     client = await _get_client(db, user)
     if not client:
         raise HTTPException(status_code=404, detail="Client profile not found")

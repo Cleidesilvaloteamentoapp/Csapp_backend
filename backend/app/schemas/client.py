@@ -62,7 +62,7 @@ class ClientResponse(BaseModel):
 
 
 class ClientProfileResponse(BaseModel):
-    """Client-facing profile response (no internal fields like asaas_customer_id)."""
+    """Client-facing profile response (no internal fields)."""
 
     id: UUID
     profile_id: Optional[UUID] = None

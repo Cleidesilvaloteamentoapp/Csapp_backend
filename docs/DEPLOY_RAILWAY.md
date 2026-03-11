@@ -77,12 +77,6 @@ ALLOWED_HOSTS=["seu-app.up.railway.app","api.seu-dominio.com.br"]
 RATE_LIMIT_PER_MINUTE=60
 AUTH_RATE_LIMIT=5/minute
 
-# Asaas
-ASAAS_API_KEY=sua-chave-asaas
-ASAAS_ENVIRONMENT=production
-ASAAS_BASE_URL=https://api.asaas.com/v3
-ASAAS_WEBHOOK_TOKEN=token-configurado-no-painel-asaas
-
 # Email
 RESEND_API_KEY=re_xxx
 SMTP_FROM_EMAIL=noreply@seu-dominio.com.br

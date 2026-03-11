@@ -27,14 +27,6 @@ class ResourceNotFoundError(Exception):
         super().__init__(self.detail)
 
 
-class AsaasIntegrationError(Exception):
-    """Raised when the Asaas API returns an error."""
-
-    def __init__(self, detail: str = "Asaas integration error"):
-        self.detail = detail
-        super().__init__(self.detail)
-
-
 class StorageError(Exception):
     """Raised when a file upload/download operation fails."""
 

@@ -19,9 +19,8 @@ from app.schemas.common import PaginatedResponse, PaginationParams
 from app.schemas.invoice import InvoiceResponse
 from app.schemas.lot import ClientLotResponse
 from app.services import client_service
-from app.services.asaas_service import create_customer
 from app.services.storage_service import upload_file, get_public_url
-from app.utils.exceptions import AsaasIntegrationError, StorageError
+from app.utils.exceptions import StorageError
 
 router = APIRouter(prefix="/clients", tags=["Admin Clients"])
 
@@ -49,7 +48,7 @@ async def create_client(
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):
-    """Create a new client. Optionally creates an Asaas customer."""
+    """Create a new client."""
     client = await client_service.create_client(db, admin.company_id, admin.id, data)
 
     await log_audit(
@@ -58,19 +57,6 @@ async def create_client(
         resource_id=str(client.id), detail=f"Created client {client.full_name}",
         ip_address=request.client.host if request.client else None,
     )
-
-    # Create Asaas customer in background-safe manner
-    try:
-        asaas_id = await create_customer(
-            name=client.full_name,
-            cpf_cnpj=client.cpf_cnpj,
-            email=client.email,
-            phone=client.phone,
-        )
-        client.asaas_customer_id = asaas_id
-        await db.flush()
-    except AsaasIntegrationError:
-        pass  # Non-blocking – can be synced later
 
     return ClientResponse.model_validate(client)
 

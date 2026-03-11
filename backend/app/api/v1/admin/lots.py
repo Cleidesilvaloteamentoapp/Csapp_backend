@@ -32,8 +32,6 @@ from app.schemas.lot import (
     LotResponse,
     LotUpdate,
 )
-from app.services.asaas_service import create_boleto
-from app.utils.exceptions import AsaasIntegrationError
 
 router = APIRouter(prefix="/lots", tags=["Admin Lots"])
 dev_router = APIRouter(prefix="/developments", tags=["Admin Developments"])
@@ -213,7 +211,7 @@ async def assign_lot(
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):
-    """Assign a lot to a client: creates client_lot + generates invoices via Asaas."""
+    """Assign a lot to a client: creates client_lot + generates invoices."""
     cid = admin.company_id
 
     # Validate lot
@@ -276,22 +274,6 @@ async def assign_lot(
             installment_number=i + 1,
             status=InvoiceStatus.PENDING,
         )
-
-        # Try Asaas boleto generation
-        if client.asaas_customer_id:
-            try:
-                boleto = await create_boleto(
-                    asaas_customer_id=client.asaas_customer_id,
-                    value=installment_value,
-                    due_date=due,
-                    installment_number=i + 1,
-                )
-                invoice.asaas_payment_id = boleto["asaas_payment_id"]
-                invoice.barcode = boleto["barcode"]
-                invoice.payment_url = boleto["payment_url"]
-            except AsaasIntegrationError:
-                pass  # Non-blocking
-
         db.add(invoice)
 
     await db.flush()

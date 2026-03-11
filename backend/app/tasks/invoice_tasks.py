@@ -1,5 +1,5 @@
 
-"""Celery tasks for invoice management and Asaas sync."""
+"""Celery tasks for invoice management."""
 
 import asyncio
 from datetime import date, datetime, timedelta, timezone
@@ -173,49 +173,3 @@ def generate_monthly_invoices(self):
         logger.error("generate_monthly_failed", error=str(exc))
         self.retry(exc=exc)
 
-
-async def _sync_payment_status_async():
-    """Sync payment status with Asaas for pending invoices."""
-    from sqlalchemy import select
-    from app.core.database import async_session_factory
-    from app.models.enums import InvoiceStatus
-    from app.models.invoice import Invoice
-    from app.services.asaas_service import get_payment
-
-    async with async_session_factory() as db:
-        rows = await db.execute(
-            select(Invoice).where(
-                Invoice.asaas_payment_id.isnot(None),
-                Invoice.status.in_([InvoiceStatus.PENDING, InvoiceStatus.OVERDUE]),
-            )
-        )
-        invoices = rows.scalars().all()
-        synced = 0
-
-        for inv in invoices:
-            try:
-                payment = await get_payment(inv.asaas_payment_id)
-                asaas_status = payment.get("status", "")
-
-                if asaas_status in ("RECEIVED", "CONFIRMED"):
-                    inv.status = InvoiceStatus.PAID
-                    inv.paid_at = datetime.now(timezone.utc)
-                    synced += 1
-                elif asaas_status == "OVERDUE" and inv.status != InvoiceStatus.OVERDUE:
-                    inv.status = InvoiceStatus.OVERDUE
-                    synced += 1
-            except Exception as exc:
-                logger.warning("sync_payment_error", invoice_id=str(inv.id), error=str(exc))
-
-        await db.commit()
-        logger.info("payment_sync_completed", synced=synced)
-
-
-@celery.task(bind=True, max_retries=3, default_retry_delay=300)
-def sync_payment_status(self):
-    """Periodic task: sync pending/overdue invoices with Asaas."""
-    try:
-        _run_async(_sync_payment_status_async())
-    except Exception as exc:
-        logger.error("sync_payment_failed", error=str(exc))
-        self.retry(exc=exc)

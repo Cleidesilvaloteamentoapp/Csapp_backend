@@ -19,7 +19,6 @@ from app.core.config import settings
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.tenant import TenantMiddleware
 from app.utils.exceptions import (
-    AsaasIntegrationError,
     AuthenticationError,
     InsufficientPermissionsError,
     InvalidTokenError,
@@ -108,12 +107,6 @@ async def auth_error_handler(request: Request, exc: AuthenticationError):
 @app.exception_handler(InvalidTokenError)
 async def token_error_handler(request: Request, exc: InvalidTokenError):
     return JSONResponse(status_code=401, content={"detail": exc.detail})
-
-
-@app.exception_handler(AsaasIntegrationError)
-async def asaas_error_handler(request: Request, exc: AsaasIntegrationError):
-    logger.error("asaas_integration_error", detail=exc.detail)
-    return JSONResponse(status_code=502, content={"detail": exc.detail})
 
 
 @app.exception_handler(StorageError)

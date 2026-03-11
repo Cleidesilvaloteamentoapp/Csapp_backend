@@ -33,11 +33,6 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # Asaas
-    ASAAS_API_KEY: str = ""
-    ASAAS_ENVIRONMENT: str = "sandbox"
-    ASAAS_BASE_URL: str = "https://sandbox.asaas.com/api/v3"
-
     # Email
     EMAIL_PROVIDER: str = "resend"
     RESEND_API_KEY: str = ""
@@ -62,7 +57,6 @@ class Settings(BaseSettings):
 
     # Security
     ALLOWED_HOSTS: list[str] = ["*"]
-    ASAAS_WEBHOOK_TOKEN: str = ""
     WEBHOOK_IP_WHITELIST: list[str] = []
 
     # Server
