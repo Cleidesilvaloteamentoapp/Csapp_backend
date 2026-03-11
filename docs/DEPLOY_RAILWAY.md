@@ -33,7 +33,7 @@ Guia completo para deploy da API FastAPI + Redis + Celery Worker + Celery Beat n
 ### 2. Provisionar Redis
 
 1. No projeto, clique em **"+ New"** → **"Database"** → **"Add Redis"**
-2. O Railway criará automaticamente a variável `REDIS_URL`
+2. O Railway criará automaticamente a variável `REDIS_URL` redis://default:nlNeAxREZJCTNRdTJjFhUwXWahRzNvyp@redis.railway.internal:6379
 3. Copie o valor de `REDIS_URL` (formato: `redis://default:password@host:port`)
 
 ### 3. Configurar Serviço API (Web)
@@ -110,6 +110,11 @@ WEBHOOK_IP_WHITELIST=
 - **Root Directory**: `backend`
 - **Builder**: Dockerfile
 - **Start Command**: `celery -A app.tasks.celery_app beat --loglevel=info`
+
+⚠️ **IMPORTANTE - Desabilitar Healthcheck:**
+- Em **Settings** → **Deploy** → **Healthcheck Path**: deixe VAZIO ou delete
+- Celery Beat não expõe porta HTTP, então healthcheck sempre vai falhar
+- Se não conseguir desabilitar via UI, use o arquivo `railway.beat.toml` no repo
 
 **Variables:** Mesmas do serviço API
 
