@@ -107,9 +107,9 @@ WEBHOOK_IP_WHITELIST=
 1. Repita o passo 4 para criar outro serviço
 
 **Settings:**
-- **Root Directory**: `backend`
 - **Builder**: Dockerfile
-- **Start Command**: `python start_beat_with_health.py`
+- **Dockerfile Path**: `backend/Dockerfile`
+- **Start Command**: `python /app/start_beat_with_health.py`
 
 ⚠️ **IMPORTANTE - Healthcheck:**
 - **Healthcheck Path**: `/health` (deixe como está)
