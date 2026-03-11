@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.enums import InvoiceStatus, BoletoStatus
 from app.models.invoice import Invoice
@@ -26,6 +27,16 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+
+
+def _verify_sicredi_origin(request: Request) -> None:
+    """Validate Sicredi webhook origin IP if whitelist is configured."""
+    if not settings.WEBHOOK_IP_WHITELIST:
+        return
+    client_ip = request.client.host if request.client else None
+    if client_ip not in settings.WEBHOOK_IP_WHITELIST:
+        logger.warning("sicredi_webhook_ip_rejected", ip=client_ip)
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @router.post("/sicredi", response_model=WebhookEventResponse)
@@ -41,24 +52,26 @@ async def sicredi_webhook(
     - LIQUIDACAO_COMPE: Boleto paid via other institutions
     - LIQUIDACAO_CARTORIO: Boleto paid via cartório
     """
+    _verify_sicredi_origin(request)
+
     try:
         body = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+        raise HTTPException(status_code=400, detail="Invalid request")
 
     # Parse the event payload
     try:
         event = WebhookEventPayload(**body)
     except Exception as exc:
-        logger.warning("sicredi_webhook_parse_error", error=str(exc), body=body)
-        raise HTTPException(status_code=400, detail=f"Invalid event payload: {exc}")
+        logger.warning("sicredi_webhook_parse_error", error=str(exc))
+        raise HTTPException(status_code=400, detail="Invalid event payload")
 
     nosso_numero = event.nossoNumero
     movimento = event.movimento
 
     if not nosso_numero or not movimento:
-        logger.warning("sicredi_webhook_missing_fields", body=body)
-        raise HTTPException(status_code=400, detail="Missing nossoNumero or movimento")
+        logger.warning("sicredi_webhook_missing_fields")
+        raise HTTPException(status_code=400, detail="Invalid payload")
 
     logger.info(
         "sicredi_webhook_received",

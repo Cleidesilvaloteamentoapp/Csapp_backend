@@ -2,17 +2,21 @@
 """FastAPI application entry point."""
 
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.tenant import TenantMiddleware
 from app.utils.exceptions import (
     AsaasIntegrationError,
@@ -46,8 +50,9 @@ app = FastAPI(
     description="API REST para sistema de gestão imobiliária multi-tenant especializado em loteamentos.",
     version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
 )
 
 app.state.limiter = limiter
@@ -57,15 +62,22 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Middleware (order matters – outermost first)
 # ---------------------------------------------------------------------------
 
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(TenantMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.ALLOWED_HOSTS)
+if settings.is_production:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.ALLOWED_HOSTS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +134,7 @@ async def sicredi_error_handler(request: Request, exc: SicrediIntegrationError):
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Simple health check for load balancers and Docker."""
-    return {"status": "ok", "app": settings.APP_NAME, "env": settings.APP_ENV}
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

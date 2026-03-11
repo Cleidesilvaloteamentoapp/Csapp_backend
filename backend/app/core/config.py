@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "CSApp Backend"
     APP_ENV: str = "development"
-    DEBUG: bool = True
+    DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
@@ -58,6 +58,15 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
+    AUTH_RATE_LIMIT: str = "5/minute"
+
+    # Security
+    ALLOWED_HOSTS: list[str] = ["*"]
+    ASAAS_WEBHOOK_TOKEN: str = ""
+    WEBHOOK_IP_WHITELIST: list[str] = []
+
+    # Server
+    PORT: int = 8000
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -66,6 +75,24 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return json.loads(v)
         return v
+
+    @field_validator("ALLOWED_HOSTS", mode="before")
+    @classmethod
+    def parse_allowed_hosts(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
+
+    @field_validator("WEBHOOK_IP_WHITELIST", mode="before")
+    @classmethod
+    def parse_webhook_ips(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            return [ip.strip() for ip in v.split(",") if ip.strip()] if v else []
+        return v
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV == "production"
 
     @property
     def supabase_jwt_jwk(self) -> dict:

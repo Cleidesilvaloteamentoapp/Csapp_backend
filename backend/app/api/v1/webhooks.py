@@ -1,12 +1,14 @@
 
 """Webhook endpoints for external integrations (Asaas)."""
 
+import hmac
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.enums import InvoiceStatus
 from app.models.invoice import Invoice
@@ -14,6 +16,16 @@ from app.utils.logging import get_logger
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 logger = get_logger(__name__)
+
+
+def _verify_asaas_token(request: Request) -> None:
+    """Validate Asaas webhook access token if configured."""
+    if not settings.ASAAS_WEBHOOK_TOKEN:
+        return
+    token = request.headers.get("asaas-access-token", "")
+    if not hmac.compare_digest(token, settings.ASAAS_WEBHOOK_TOKEN):
+        logger.warning("asaas_webhook_auth_failed", ip=request.client.host if request.client else None)
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 @router.post("/asaas")
@@ -27,18 +39,20 @@ async def asaas_webhook(
     - PAYMENT_RECEIVED / PAYMENT_CONFIRMED → mark invoice as paid
     - PAYMENT_OVERDUE → mark invoice as overdue
     """
+    _verify_asaas_token(request)
+
     try:
         body = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+        raise HTTPException(status_code=400, detail="Invalid request")
 
     event = body.get("event")
     payment = body.get("payment", {})
     asaas_payment_id = payment.get("id")
 
     if not event or not asaas_payment_id:
-        logger.warning("asaas_webhook_invalid", body=body)
-        raise HTTPException(status_code=400, detail="Missing event or payment id")
+        logger.warning("asaas_webhook_invalid")
+        raise HTTPException(status_code=400, detail="Invalid payload")
 
     logger.info("asaas_webhook_received", event=event, payment_id=asaas_payment_id)
 

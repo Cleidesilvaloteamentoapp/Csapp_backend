@@ -68,11 +68,15 @@ async def upload_file(
     return storage_path
 
 
-def get_public_url(storage_path: str) -> str:
-    """Return the public URL of an uploaded file."""
+def get_public_url(storage_path: str, expires_in: int = 3600) -> str:
+    """Return a signed URL for an uploaded file (expires in 1 hour by default)."""
     try:
         supabase = _get_supabase()
-        data = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(storage_path)
+        data = supabase.storage.from_(settings.SUPABASE_STORAGE_BUCKET).create_signed_url(
+            storage_path, expires_in
+        )
+        if isinstance(data, dict) and "signedURL" in data:
+            return data["signedURL"]
         return data
     except Exception as exc:
         raise StorageError(f"Failed to get URL: {exc}") from exc

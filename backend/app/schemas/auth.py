@@ -4,7 +4,9 @@ from typing import Optional
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+import re
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class SignupRequest(BaseModel):
@@ -17,6 +19,19 @@ class SignupRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
     cpf_cnpj: str = Field(..., min_length=11, max_length=20)
     phone: str = Field(..., min_length=10, max_length=20)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+        if not re.search(r"[^A-Za-z0-9]", v):
+            raise ValueError("Password must contain at least one special character")
+        return v
 
 
 class LoginRequest(BaseModel):

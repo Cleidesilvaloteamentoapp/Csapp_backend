@@ -62,7 +62,7 @@ def get_tenant_filter(company_id_column, *, allow_super_admin: bool = True):
     from sqlalchemy import true as sa_true
 
     role = current_user_role.get()
-    if allow_super_admin and role == "super_admin":
+    if allow_super_admin and role == "SUPER_ADMIN":
         return sa_true()
 
     cid = current_company_id.get()

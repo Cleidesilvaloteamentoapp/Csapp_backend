@@ -30,17 +30,20 @@ async def signup(data: SignupRequest, db: AsyncSession) -> TokenResponse:
     # Check slug uniqueness
     existing = await db.execute(select(Company).where(Company.slug == data.company_slug))
     if existing.scalar_one_or_none():
-        raise AuthenticationError(f"Company slug '{data.company_slug}' is already taken")
+        logger.warning("signup_conflict", reason="slug_taken")
+        raise AuthenticationError("Registration failed: duplicate data detected")
 
     # Check email uniqueness
     existing_email = await db.execute(select(Profile).where(Profile.email == data.email))
     if existing_email.scalar_one_or_none():
-        raise AuthenticationError(f"Email '{data.email}' is already registered")
+        logger.warning("signup_conflict", reason="email_taken")
+        raise AuthenticationError("Registration failed: duplicate data detected")
 
     # Check CPF/CNPJ uniqueness
     existing_cpf = await db.execute(select(Profile).where(Profile.cpf_cnpj == data.cpf_cnpj))
     if existing_cpf.scalar_one_or_none():
-        raise AuthenticationError(f"CPF/CNPJ '{data.cpf_cnpj}' is already registered")
+        logger.warning("signup_conflict", reason="cpf_cnpj_taken")
+        raise AuthenticationError("Registration failed: duplicate data detected")
 
     # Create company
     company = Company(
