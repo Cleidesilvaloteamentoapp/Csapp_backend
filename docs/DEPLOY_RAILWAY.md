@@ -109,12 +109,12 @@ WEBHOOK_IP_WHITELIST=
 **Settings:**
 - **Root Directory**: `backend`
 - **Builder**: Dockerfile
-- **Start Command**: `celery -A app.tasks.celery_app beat --loglevel=info`
+- **Start Command**: `python start_beat_with_health.py`
 
-⚠️ **IMPORTANTE - Desabilitar Healthcheck:**
-- Em **Settings** → **Deploy** → **Healthcheck Path**: deixe VAZIO ou delete
-- Celery Beat não expõe porta HTTP, então healthcheck sempre vai falhar
-- Se não conseguir desabilitar via UI, use o arquivo `railway.beat.toml` no repo
+⚠️ **IMPORTANTE - Healthcheck:**
+- **Healthcheck Path**: `/health` (deixe como está)
+- O script `start_beat_with_health.py` roda um servidor HTTP mínimo para satisfazer o healthcheck do Railway
+- Celery Beat roda em paralelo no mesmo container
 
 **Variables:** Mesmas do serviço API
 
