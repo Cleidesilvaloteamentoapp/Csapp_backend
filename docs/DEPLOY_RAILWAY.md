@@ -39,10 +39,11 @@ Guia completo para deploy da API FastAPI + Redis + Celery Worker + Celery Beat n
 ### 3. Configurar Serviço API (Web)
 
 **Settings:**
-- **Root Directory**: `backend`
 - **Builder**: Dockerfile
-- **Dockerfile Path**: `Dockerfile`
+- **Dockerfile Path**: `backend/Dockerfile`
 - **Start Command**: (deixar vazio, usa o CMD do Dockerfile)
+
+⚠️ **IMPORTANTE**: Configure TODAS as variáveis abaixo ANTES de fazer o primeiro deploy. O container vai falhar no healthcheck se variáveis obrigatórias estiverem faltando.
 
 **Variables (obrigatórias):**
 
