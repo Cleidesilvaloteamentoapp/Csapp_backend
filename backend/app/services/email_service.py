@@ -100,11 +100,11 @@ async def send_overdue_alert(to: str, name: str, due_date: str, amount: str) -> 
     await send_email(to=to, subject="Alerta: boleto em atraso", html=html)
 
 
-async def send_rescission_alert(to: str, name: str, overdue_months: int) -> None:
+async def send_rescission_alert(to: str, name: str, days_overdue: int) -> None:
     """Send rescission warning for long-term default."""
     html = f"""
     <h2>Alerta de possível rescisão</h2>
-    <p>Olá, {name}. Identificamos que você está com <strong>{overdue_months} meses</strong> de atraso.</p>
+    <p>Olá, {name}. Identificamos que você está com <strong>{days_overdue} dias</strong> de atraso.</p>
     <p>Por favor, entre em contato conosco para regularizar sua situação e evitar a rescisão do contrato.</p>
     """
     await send_email(to=to, subject="URGENTE: Alerta de rescisão contratual", html=html)

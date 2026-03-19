@@ -27,18 +27,28 @@ def calculate_correction(
     original_amount: Decimal,
     due_date: date,
     calculation_date: Optional[date] = None,
+    *,
+    penalty_rate: Optional[Decimal] = None,
+    daily_interest_rate: Optional[Decimal] = None,
 ) -> dict:
     """Calculate penalty + interest for an overdue amount.
 
+    Uses per-lot rates if provided, otherwise falls back to system defaults.
+
     Returns a dict with:
       - original_amount
-      - penalty (2% flat)
-      - interest (0.033%/day * days overdue)
+      - penalty (default 2% flat)
+      - interest (default 0.033%/day * days overdue)
       - corrected_amount
       - days_overdue
+      - penalty_rate_used
+      - interest_rate_used
     """
     calc_date = calculation_date or date.today()
     days_overdue = max(0, (calc_date - due_date).days)
+
+    p_rate = penalty_rate if penalty_rate is not None else PENALTY_RATE
+    i_rate = daily_interest_rate if daily_interest_rate is not None else DAILY_INTEREST_RATE
 
     if days_overdue == 0:
         return {
@@ -47,10 +57,12 @@ def calculate_correction(
             "interest": Decimal("0"),
             "corrected_amount": original_amount,
             "days_overdue": 0,
+            "penalty_rate_used": p_rate,
+            "interest_rate_used": i_rate,
         }
 
-    penalty = (original_amount * PENALTY_RATE).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    interest = (original_amount * DAILY_INTEREST_RATE * days_overdue).quantize(
+    penalty = (original_amount * p_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    interest = (original_amount * i_rate * days_overdue).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
     corrected_amount = original_amount + penalty + interest
@@ -61,6 +73,8 @@ def calculate_correction(
         "interest": interest,
         "corrected_amount": corrected_amount,
         "days_overdue": days_overdue,
+        "penalty_rate_used": p_rate,
+        "interest_rate_used": i_rate,
     }
 
 
@@ -83,7 +97,19 @@ async def preview_segunda_via(
     if invoice.status not in (InvoiceStatus.OVERDUE, InvoiceStatus.PENDING):
         raise ValueError(f"Invoice is in status {invoice.status.value}, cannot issue second copy")
 
-    correction = calculate_correction(invoice.amount, invoice.due_date)
+    # Load per-lot rates if available
+    from app.models.client_lot import ClientLot
+    cl_row = await db.execute(
+        select(ClientLot).where(ClientLot.id == invoice.client_lot_id)
+    )
+    client_lot = cl_row.scalar_one_or_none()
+
+    correction = calculate_correction(
+        invoice.amount,
+        invoice.due_date,
+        penalty_rate=client_lot.penalty_rate if client_lot else None,
+        daily_interest_rate=client_lot.daily_interest_rate if client_lot else None,
+    )
     new_due_date = date.today() + timedelta(days=3)
 
     return {
@@ -131,7 +157,12 @@ async def issue_segunda_via(
     if not client_lot:
         raise ValueError("Client lot not found for this invoice")
 
-    correction = calculate_correction(invoice.amount, invoice.due_date)
+    correction = calculate_correction(
+        invoice.amount,
+        invoice.due_date,
+        penalty_rate=client_lot.penalty_rate,
+        daily_interest_rate=client_lot.daily_interest_rate,
+    )
     due = new_due_date or (date.today() + timedelta(days=3))
 
     await record_event(

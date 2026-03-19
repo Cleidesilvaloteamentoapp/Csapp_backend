@@ -53,4 +53,16 @@ celery.conf.beat_schedule = {
         "task": "app.tasks.adjustment_tasks.send_admin_alerts",
         "schedule": crontab(hour=7, minute=30),  # 07:30 daily
     },
+    "send-whatsapp-reminders": {
+        "task": "app.tasks.notification_tasks.send_whatsapp_reminders",
+        "schedule": crontab(hour=9, minute=30),  # 09:30 daily
+    },
+    "overdue-escalation-daily": {
+        "task": "app.tasks.notification_tasks.overdue_escalation",
+        "schedule": crontab(hour=8, minute=0),  # 08:00 daily
+    },
+    "check-cycle-completions-daily": {
+        "task": "app.tasks.notification_tasks.check_cycle_completions",
+        "schedule": crontab(hour=4, minute=0),  # 04:00 daily
+    },
 }

@@ -18,6 +18,11 @@ from app.api.v1.admin import sicredi as admin_sicredi
 from app.api.v1.admin import boletos as admin_boletos
 from app.api.v1.admin import documents as admin_documents
 from app.api.v1.admin import service_requests as admin_service_requests
+from app.api.v1.admin import economic_indices as admin_economic_indices
+from app.api.v1.admin import cycle_approvals as admin_cycle_approvals
+from app.api.v1.admin import transfers as admin_transfers
+from app.api.v1.admin import early_payoff as admin_early_payoff
+from app.api.v1.admin import bank_statements as admin_bank_statements
 from app.api.v1.client import dashboard as client_dashboard
 from app.api.v1.client import documents as client_documents
 from app.api.v1.client import invoices as client_invoices
@@ -26,6 +31,7 @@ from app.api.v1.client import boletos as client_boletos
 from app.api.v1.client import notifications as client_notifications
 from app.api.v1.client import profile as client_profile
 from app.api.v1.client import service_requests as client_service_requests
+from app.api.v1.client import early_payoff as client_early_payoff
 from app.api.v1.client import services as client_services
 
 api_router = APIRouter()
@@ -55,6 +61,11 @@ api_router.include_router(admin_segunda_via.router, prefix="/admin")
 api_router.include_router(admin_reports.router, prefix="/admin")
 api_router.include_router(admin_documents.router, prefix="/admin")
 api_router.include_router(admin_service_requests.router, prefix="/admin")
+api_router.include_router(admin_economic_indices.router, prefix="/admin")
+api_router.include_router(admin_cycle_approvals.router, prefix="/admin")
+api_router.include_router(admin_transfers.router, prefix="/admin")
+api_router.include_router(admin_early_payoff.router, prefix="/admin")
+api_router.include_router(admin_bank_statements.router, prefix="/admin")
 
 # Client portal
 api_router.include_router(client_dashboard.router, prefix="/client")
@@ -66,3 +77,4 @@ api_router.include_router(client_referrals.router, prefix="/client")
 api_router.include_router(client_profile.router, prefix="/client")
 api_router.include_router(client_service_requests.router, prefix="/client")
 api_router.include_router(client_notifications.router, prefix="/client")
+api_router.include_router(client_early_payoff.router, prefix="/client")

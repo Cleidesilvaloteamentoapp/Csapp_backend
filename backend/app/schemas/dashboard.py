@@ -85,6 +85,19 @@ class DefaulterInfo(BaseModel):
     overdue_amount: Decimal
 
 
+class DefaulterDetailResponse(BaseModel):
+    """Detailed defaulter info for dashboard drill-down."""
+
+    client_id: UUID
+    client_name: str
+    cpf_cnpj: str
+    phone: str
+    overdue_invoices: int
+    overdue_amount: Decimal
+    oldest_due_date: Optional[date] = None
+    days_overdue: int = 0
+
+
 class RevenueByService(BaseModel):
     """Revenue grouped by service type."""
 

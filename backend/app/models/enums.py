@@ -59,6 +59,14 @@ class ReferralStatus(str, enum.Enum):
     LOST = "LOST"
 
 
+class BoletoTag(str, enum.Enum):
+    ENTRADA_PARCELADA = "ENTRADA_PARCELADA"
+    PARCELA_CONTRATO = "PARCELA_CONTRATO"
+    SERVICO_AVULSO = "SERVICO_AVULSO"
+    SEGUNDA_VIA = "SEGUNDA_VIA"
+    RENEGOCIACAO = "RENEGOCIACAO"
+
+
 class BoletoStatus(str, enum.Enum):
     NORMAL = "NORMAL"
     LIQUIDADO = "LIQUIDADO"
@@ -66,6 +74,26 @@ class BoletoStatus(str, enum.Enum):
     CANCELADO = "CANCELADO"
     NEGATIVADO = "NEGATIVADO"
     PENDING_APPROVAL = "PENDING_APPROVAL"
+    BAIXA_MANUAL = "BAIXA_MANUAL"
+
+
+class WriteoffType(str, enum.Enum):
+    AUTOMATICA_BANCO = "AUTOMATICA_BANCO"
+    MANUAL_ADMIN = "MANUAL_ADMIN"
+
+
+class AdjustmentIndex(str, enum.Enum):
+    IPCA = "IPCA"
+    IGPM = "IGPM"
+    CUB = "CUB"
+    INPC = "INPC"
+
+
+class AdjustmentFrequency(str, enum.Enum):
+    MONTHLY = "MONTHLY"
+    QUARTERLY = "QUARTERLY"
+    SEMIANNUAL = "SEMIANNUAL"
+    ANNUAL = "ANNUAL"
 
 
 class ContractEventType(str, enum.Enum):
@@ -83,6 +111,30 @@ class ContractEventType(str, enum.Enum):
     RESCISSION_COMPLETED = "RESCISSION_COMPLETED"
     STATUS_CHANGE = "STATUS_CHANGE"
     NOTE = "NOTE"
+    TRANSFER = "TRANSFER"
+    AUTO_RESCISSION = "AUTO_RESCISSION"
+    CYCLE_APPROVED = "CYCLE_APPROVED"
+    EARLY_PAYOFF_REQUEST = "EARLY_PAYOFF_REQUEST"
+
+
+class CycleApprovalStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class TransferStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class EarlyPayoffStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    CONTACTED = "CONTACTED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class RenegotiationStatus(str, enum.Enum):
@@ -149,3 +201,12 @@ class NotificationType(str, enum.Enum):
     DOCUMENTO_REJEITADO = "DOCUMENTO_REJEITADO"
     SOLICITACAO_ATUALIZADA = "SOLICITACAO_ATUALIZADA"
     GERAL = "GERAL"
+    CICLO_PENDENTE = "CICLO_PENDENTE"
+    TRANSFERENCIA_CONTRATO = "TRANSFERENCIA_CONTRATO"
+    ANTECIPACAO_SOLICITADA = "ANTECIPACAO_SOLICITADA"
+    DISTRATO_AUTOMATICO = "DISTRATO_AUTOMATICO"
+
+
+class IndexSource(str, enum.Enum):
+    MANUAL = "MANUAL"
+    BCB_API = "BCB_API"

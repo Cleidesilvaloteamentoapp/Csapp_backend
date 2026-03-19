@@ -25,6 +25,10 @@ AUDITED_TABLES = frozenset({
     "profiles",
     "client_documents",
     "service_requests",
+    "economic_indices",
+    "cycle_approvals",
+    "contract_transfers",
+    "early_payoff_requests",
 })
 
 

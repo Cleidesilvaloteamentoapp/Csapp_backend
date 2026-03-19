@@ -17,17 +17,19 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, get_super_admin
 from app.models.user import Profile
 from app.models.boleto import Boleto
 from app.models.client import Client
-from app.models.enums import BoletoStatus
+from app.models.enums import BoletoStatus, BoletoTag, WriteoffType
 from app.schemas.boleto import (
     BoletoResponse,
     BoletoListResponse,
     BoletoWithClientResponse,
     BoletoUpdateRequest,
+    ManualWriteoffRequest,
 )
 from app.utils.logging import get_logger
 
@@ -49,6 +51,7 @@ async def list_boletos(
     data_vencimento_inicio: Optional[date] = Query(None, description="Filter by due date start (YYYY-MM-DD)"),
     data_vencimento_fim: Optional[date] = Query(None, description="Filter by due date end (YYYY-MM-DD)"),
     seu_numero: Optional[str] = Query(None, description="Search by seu_numero (internal control number)"),
+    tag: Optional[str] = Query(None, description="Filter by tag: ENTRADA_PARCELADA, PARCELA_CONTRATO, SERVICO_AVULSO, SEGUNDA_VIA, RENEGOCIACAO"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -58,6 +61,13 @@ async def list_boletos(
     
     if client_id:
         stmt = stmt.where(Boleto.client_id == client_id)
+    
+    if tag:
+        try:
+            tag_enum = BoletoTag(tag.upper())
+            stmt = stmt.where(Boleto.tag == tag_enum)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid tag: {tag}")
     
     if status:
         try:
@@ -91,12 +101,15 @@ async def list_boletos(
             "linha_digitavel": boleto.linha_digitavel,
             "codigo_barras": boleto.codigo_barras,
             "tipo_cobranca": boleto.tipo_cobranca,
+            "tag": boleto.tag.value if boleto.tag else None,
+            "installment_label": boleto.installment_label,
             "data_vencimento": boleto.data_vencimento,
             "data_emissao": boleto.data_emissao,
             "data_liquidacao": boleto.data_liquidacao,
             "valor": boleto.valor,
             "valor_liquidacao": boleto.valor_liquidacao,
             "status": boleto.status.value,
+            "writeoff_type": boleto.writeoff_type.value if boleto.writeoff_type else None,
             "txid": boleto.txid,
             "qr_code": boleto.qr_code,
             "created_at": boleto.created_at,
@@ -282,6 +295,8 @@ async def update_boleto(
     for key, value in update_data.items():
         if key == "status":
             setattr(boleto, key, BoletoStatus(value))
+        elif key == "tag":
+            setattr(boleto, key, BoletoTag(value))
         else:
             setattr(boleto, key, value)
     
@@ -320,3 +335,66 @@ async def delete_boleto(
     await db.commit()
     
     logger.info(f"Boleto {boleto.nosso_numero} cancelled by admin {admin.id}")
+
+
+# ---------------------------------------------------------------------------
+# Manual writeoff (SUPER_ADMIN only)
+# ---------------------------------------------------------------------------
+
+@router.post("/{boleto_id}/baixa-manual", response_model=BoletoResponse)
+async def manual_writeoff(
+    boleto_id: UUID,
+    payload: ManualWriteoffRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_super_admin),
+):
+    """Manually write off a boleto (SUPER_ADMIN only).
+
+    Tags the writeoff as MANUAL_ADMIN with the admin's ID and reason.
+    """
+    stmt = select(Boleto).where(
+        Boleto.id == boleto_id,
+        Boleto.company_id == admin.company_id
+    )
+    result = await db.execute(stmt)
+    boleto = result.scalar_one_or_none()
+
+    if not boleto:
+        raise HTTPException(status_code=404, detail="Boleto not found")
+
+    if boleto.status == BoletoStatus.LIQUIDADO:
+        raise HTTPException(status_code=400, detail="Boleto already liquidated")
+    if boleto.status == BoletoStatus.CANCELADO:
+        raise HTTPException(status_code=400, detail="Cannot write off a cancelled boleto")
+
+    boleto.status = BoletoStatus.BAIXA_MANUAL
+    boleto.writeoff_type = WriteoffType.MANUAL_ADMIN
+    boleto.writeoff_by = admin.id
+    boleto.writeoff_reason = payload.reason
+    boleto.data_liquidacao = payload.data_liquidacao or date.today()
+    if payload.valor_liquidacao is not None:
+        boleto.valor_liquidacao = payload.valor_liquidacao
+    else:
+        boleto.valor_liquidacao = boleto.valor
+
+    await log_audit(
+        db,
+        user_id=admin.id,
+        company_id=admin.company_id,
+        table_name="boletos",
+        operation="MANUAL_WRITEOFF",
+        resource_id=str(boleto_id),
+        detail=f"Manual writeoff: {payload.reason}. Value: {boleto.valor_liquidacao}",
+    )
+
+    await db.commit()
+    await db.refresh(boleto)
+
+    logger.info(
+        "boleto_manual_writeoff",
+        nosso_numero=boleto.nosso_numero,
+        admin_id=str(admin.id),
+        reason=payload.reason,
+    )
+
+    return BoletoResponse.model_validate(boleto)

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.base import TenantMixin, TimestampMixin
-from app.models.enums import BoletoStatus
+from app.models.enums import BoletoStatus, BoletoTag, WriteoffType
 
 
 class Boleto(Base, TenantMixin, TimestampMixin):
@@ -32,6 +32,13 @@ class Boleto(Base, TenantMixin, TimestampMixin):
     
     tipo_cobranca: Mapped[str] = mapped_column(String(20), nullable=False)
     especie_documento: Mapped[str] = mapped_column(String(50), nullable=False)
+    
+    tag: Mapped[Optional[BoletoTag]] = mapped_column(
+        SAEnum(BoletoTag, name="boleto_tag", create_constraint=False),
+        nullable=True,
+        index=True,
+    )
+    installment_label: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     
     data_vencimento: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     data_emissao: Mapped[date] = mapped_column(Date, nullable=False, index=True)
@@ -56,6 +63,15 @@ class Boleto(Base, TenantMixin, TimestampMixin):
     
     pagador_data: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     raw_response: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
+    
+    writeoff_type: Mapped[Optional[WriteoffType]] = mapped_column(
+        SAEnum(WriteoffType, name="writeoff_type", create_constraint=False),
+        nullable=True,
+    )
+    writeoff_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    writeoff_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True

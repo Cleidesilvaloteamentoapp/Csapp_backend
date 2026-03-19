@@ -20,3 +20,7 @@ from app.models.notification import Notification  # noqa: F401
 from app.models.service_request import ServiceRequest, ServiceRequestMessage  # noqa: F401
 from app.models.sicredi_credential import SicrediCredential  # noqa: F401
 from app.models.user import Profile  # noqa: F401
+from app.models.economic_index import EconomicIndex  # noqa: F401
+from app.models.cycle_approval import CycleApproval  # noqa: F401
+from app.models.contract_transfer import ContractTransfer  # noqa: F401
+from app.models.early_payoff_request import EarlyPayoffRequest  # noqa: F401

@@ -20,41 +20,40 @@ def _run_async(coro):
 
 
 async def _apply_annual_adjustments_async():
-    """Apply annual IPCA + fixed rate adjustments to active contracts.
+    """Apply per-lot index + fixed rate adjustments to active contracts.
 
-    Rule: Valor da Parcela + 5% + IPCA acumulado dos últimos 12 meses.
+    Each contract can use a different index (IPCA, IGPM, CUB, INPC) and custom
+    fixed rate, configured via client_lot.adjustment_index and
+    client_lot.adjustment_custom_rate.
+
+    Default: IPCA + 5% fixed rate.
     Only applies to contracts where the last 12-installment cycle is fully paid.
     """
     from sqlalchemy import select, func
     from app.core.database import async_session_factory
     from app.models.client_lot import ClientLot
-    from app.models.enums import ClientLotStatus, ContractEventType, InvoiceStatus
+    from app.models.enums import AdjustmentIndex, ClientLotStatus, ContractEventType, InvoiceStatus
     from app.models.invoice import Invoice
     from app.services.contract_history_service import record_event
-    from app.services.ipca_service import get_ipca_accumulated_12_months, calculate_adjusted_value
+    from app.services.index_service import get_accumulated_index, calculate_adjusted_value
 
     today = date.today()
 
     async with async_session_factory() as db:
-        # Fetch IPCA for last 12 months
-        ipca_pct = await get_ipca_accumulated_12_months(today)
-        logger.info("annual_adjustment_ipca", ipca_pct=str(ipca_pct))
-
-        if ipca_pct <= 0:
-            logger.warning("annual_adjustment_skipped_no_ipca")
-            return
-
         # Find active contracts that need adjustment (not adjusted this year)
         one_year_ago = today - timedelta(days=365)
         rows = await db.execute(
             select(ClientLot).where(
                 ClientLot.status == ClientLotStatus.ACTIVE,
-                # Only adjust if last adjustment was > 1 year ago or never adjusted
                 ClientLot.last_adjustment_date.is_(None) | (ClientLot.last_adjustment_date <= one_year_ago),
             )
         )
         contracts = rows.scalars().all()
         adjusted_count = 0
+        skipped_no_index = 0
+
+        # Cache index values per (index_type, company_id) to avoid repeated API calls
+        index_cache: dict[tuple, Decimal] = {}
 
         for cl in contracts:
             # Check if the last 12 invoices are all PAID (cycle lock)
@@ -70,17 +69,37 @@ async def _apply_annual_adjustments_async():
             recent = list(recent_invoices.scalars().all())
 
             if len(recent) < 12:
-                continue  # Not enough invoices yet
-
+                continue
             all_paid = all(inv.status == InvoiceStatus.PAID for inv in recent)
             if not all_paid:
-                continue  # Cannot adjust — cycle not fully paid
+                continue
 
-            # Calculate adjustment
+            # Determine which index to use (per-lot or default IPCA)
+            index_type = cl.adjustment_index or AdjustmentIndex.IPCA
+            cache_key = (index_type, cl.company_id)
+
+            if cache_key not in index_cache:
+                index_pct = await get_accumulated_index(
+                    index_type,
+                    reference_date=today,
+                    db=db,
+                    company_id=cl.company_id,
+                )
+                index_cache[cache_key] = index_pct
+
+            index_pct = index_cache[cache_key]
+
+            if index_pct <= 0:
+                skipped_no_index += 1
+                logger.warning("adjustment_skipped_no_index", cl_id=str(cl.id), index=index_type.value)
+                continue
+
+            # Calculate adjustment using per-lot custom rate or default 5%
             current_value = cl.current_installment_value or (cl.total_value / cl.total_installments)
-            fixed_rate = Decimal(str(cl.annual_adjustment_rate or Decimal("0.05"))) * Decimal("100")
+            custom_rate = cl.adjustment_custom_rate
+            fixed_rate_pct = Decimal(str(custom_rate * 100)) if custom_rate else Decimal(str(cl.annual_adjustment_rate or Decimal("0.05"))) * Decimal("100")
 
-            adj = calculate_adjusted_value(current_value, ipca_pct, fixed_rate)
+            adj = calculate_adjusted_value(current_value, index_pct, fixed_rate_pct)
 
             # Update contract
             cl.current_installment_value = adj["new_value"]
@@ -96,7 +115,7 @@ async def _apply_annual_adjustments_async():
                 event_type=ContractEventType.ADJUSTMENT,
                 description=(
                     f"Reajuste anual aplicado (ciclo {cl.current_cycle}). "
-                    f"IPCA: {ipca_pct}%, Taxa fixa: {fixed_rate}%. "
+                    f"Índice: {index_type.value} {index_pct}%, Taxa fixa: {fixed_rate_pct}%. "
                     f"Valor anterior: R${adj['original_value']}, "
                     f"Novo valor: R${adj['new_value']}"
                 ),
@@ -104,9 +123,10 @@ async def _apply_annual_adjustments_async():
                 previous_value=str(adj["original_value"]),
                 new_value=str(adj["new_value"]),
                 metadata_json={
-                    "ipca_pct": str(ipca_pct),
-                    "fixed_rate_pct": str(fixed_rate),
-                    "ipca_adjustment": str(adj["ipca_adjustment"]),
+                    "index_type": index_type.value,
+                    "index_pct": str(index_pct),
+                    "fixed_rate_pct": str(fixed_rate_pct),
+                    "index_adjustment": str(adj["index_adjustment"]),
                     "fixed_adjustment": str(adj["fixed_adjustment"]),
                     "cycle": cl.current_cycle,
                 },
@@ -116,12 +136,17 @@ async def _apply_annual_adjustments_async():
             logger.info(
                 "contract_adjusted",
                 client_lot_id=str(cl.id),
+                index=index_type.value,
                 old_value=str(adj["original_value"]),
                 new_value=str(adj["new_value"]),
             )
 
         await db.commit()
-        logger.info("annual_adjustments_completed", count=adjusted_count)
+        logger.info(
+            "annual_adjustments_completed",
+            count=adjusted_count,
+            skipped_no_index=skipped_no_index,
+        )
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=600)

@@ -24,6 +24,9 @@ class BoletoResponse(BaseModel):
     tipo_cobranca: str
     especie_documento: str
     
+    tag: Optional[str] = None
+    installment_label: Optional[str] = None
+    
     data_vencimento: date
     data_emissao: date
     data_liquidacao: Optional[date] = None
@@ -40,6 +43,10 @@ class BoletoResponse(BaseModel):
     
     pagador_data: Optional[dict] = None
     raw_response: Optional[dict] = None
+    
+    writeoff_type: Optional[str] = None
+    writeoff_by: Optional[UUID] = None
+    writeoff_reason: Optional[str] = None
     
     created_by: Optional[UUID] = None
     created_at: datetime
@@ -59,6 +66,8 @@ class BoletoListResponse(BaseModel):
     linha_digitavel: Optional[str] = None
     
     tipo_cobranca: str
+    tag: Optional[str] = None
+    installment_label: Optional[str] = None
     data_vencimento: date
     data_emissao: date
     data_liquidacao: Optional[date] = None
@@ -66,6 +75,7 @@ class BoletoListResponse(BaseModel):
     valor: Decimal
     valor_liquidacao: Optional[Decimal] = None
     status: str
+    writeoff_type: Optional[str] = None
     
     pagador_data: Optional[dict] = None
     created_at: datetime
@@ -93,6 +103,8 @@ class BoletoWithClientResponse(BaseModel):
     codigo_barras: Optional[str] = None
     
     tipo_cobranca: str
+    tag: Optional[str] = None
+    installment_label: Optional[str] = None
     data_vencimento: date
     data_emissao: date
     data_liquidacao: Optional[date] = None
@@ -100,6 +112,7 @@ class BoletoWithClientResponse(BaseModel):
     valor: Decimal
     valor_liquidacao: Optional[Decimal] = None
     status: str
+    writeoff_type: Optional[str] = None
     
     txid: Optional[str] = None
     qr_code: Optional[str] = None
@@ -113,9 +126,18 @@ class BoletoWithClientResponse(BaseModel):
 
 
 class BoletoUpdateRequest(BaseModel):
-    """Request to update boleto fields (status, payment info)."""
+    """Request to update boleto fields (status, payment info). Does NOT allow LIQUIDADO via this endpoint."""
 
-    status: Optional[str] = Field(None, pattern="^(NORMAL|LIQUIDADO|VENCIDO|CANCELADO)$")
+    status: Optional[str] = Field(None, pattern="^(NORMAL|VENCIDO|CANCELADO)$")
+    tag: Optional[str] = Field(None, pattern="^(ENTRADA_PARCELADA|PARCELA_CONTRATO|SERVICO_AVULSO|SEGUNDA_VIA|RENEGOCIACAO)$")
     data_liquidacao: Optional[date] = None
     valor_liquidacao: Optional[Decimal] = None
     raw_response: Optional[dict] = None
+
+
+class ManualWriteoffRequest(BaseModel):
+    """Request for manual boleto writeoff (SUPER_ADMIN only)."""
+
+    valor_liquidacao: Optional[Decimal] = None
+    data_liquidacao: Optional[date] = None
+    reason: str = Field(..., min_length=5, max_length=500, description="Reason for manual writeoff")

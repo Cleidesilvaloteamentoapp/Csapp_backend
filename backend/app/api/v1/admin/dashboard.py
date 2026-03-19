@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import get_company_admin
 from app.models.client import Client
+from app.models.client_lot import ClientLot
 from app.models.enums import (
     ClientStatus,
     InvoiceStatus,
@@ -23,6 +24,7 @@ from app.models.service import ServiceOrder, ServiceType
 from app.models.user import Profile
 from app.schemas.dashboard import (
     AdminStats,
+    DefaulterDetailResponse,
     FinancialOverview,
     RecentActivity,
     RevenueChartPoint,
@@ -191,3 +193,53 @@ async def services_chart(
     )
     rows = (await db.execute(q)).all()
     return [ServiceChartPoint(service_name=r[0], count=r[1]) for r in rows]
+
+
+@router.get("/defaulters", response_model=list[DefaulterDetailResponse])
+async def list_defaulters(
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """List defaulter clients with overdue details (drill-down from dashboard card)."""
+    cid = admin.company_id
+    today = datetime.now(timezone.utc).date()
+
+    q = (
+        select(
+            Client.id.label("client_id"),
+            Client.full_name.label("client_name"),
+            Client.cpf_cnpj.label("cpf_cnpj"),
+            Client.phone.label("phone"),
+            func.count(Invoice.id).label("overdue_invoices"),
+            func.coalesce(func.sum(Invoice.amount), 0).label("overdue_amount"),
+            func.min(Invoice.due_date).label("oldest_due_date"),
+        )
+        .join(ClientLot, ClientLot.client_id == Client.id)
+        .join(Invoice, Invoice.client_lot_id == ClientLot.id)
+        .where(
+            Client.company_id == cid,
+            Client.status == ClientStatus.DEFAULTER,
+            Invoice.status == InvoiceStatus.OVERDUE,
+        )
+        .group_by(Client.id, Client.full_name, Client.cpf_cnpj, Client.phone)
+        .order_by(func.min(Invoice.due_date).asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = (await db.execute(q)).all()
+
+    return [
+        DefaulterDetailResponse(
+            client_id=r.client_id,
+            client_name=r.client_name,
+            cpf_cnpj=r.cpf_cnpj,
+            phone=r.phone,
+            overdue_invoices=r.overdue_invoices,
+            overdue_amount=Decimal(str(r.overdue_amount)),
+            oldest_due_date=r.oldest_due_date,
+            days_overdue=(today - r.oldest_due_date).days if r.oldest_due_date else 0,
+        )
+        for r in rows
+    ]
