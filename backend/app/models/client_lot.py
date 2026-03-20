@@ -83,7 +83,14 @@ class ClientLot(Base, TenantMixin, TimestampMixin):
     )
 
     # Relationships
-    client = relationship("Client", back_populates="client_lots", lazy="selectin")
+    client = relationship(
+        "Client", back_populates="client_lots", lazy="selectin",
+        foreign_keys=[client_id],
+    )
+    previous_client = relationship(
+        "Client", lazy="selectin",
+        foreign_keys=[previous_client_id],
+    )
     lot = relationship("Lot", back_populates="client_lots", lazy="selectin")
     invoices = relationship("Invoice", back_populates="client_lot", lazy="selectin")
 

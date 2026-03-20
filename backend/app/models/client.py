@@ -48,7 +48,10 @@ class Client(Base, TenantMixin, TimestampMixin):
     # Relationships
     profile = relationship("Profile", foreign_keys=[profile_id], lazy="selectin")
     creator = relationship("Profile", foreign_keys=[created_by], lazy="selectin")
-    client_lots = relationship("ClientLot", back_populates="client", lazy="selectin")
+    client_lots = relationship(
+        "ClientLot", back_populates="client", lazy="selectin",
+        foreign_keys="[ClientLot.client_id]",
+    )
     boletos = relationship("Boleto", back_populates="client", lazy="selectin")
 
     def __repr__(self) -> str:
