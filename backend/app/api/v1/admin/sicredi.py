@@ -695,6 +695,8 @@ async def baixar_boleto(
         await sicredi_service.persist_token_cache(db, admin.company_id)
     except SicrediError as exc:
         error_msg = str(exc.detail or "")
+        
+        # Handle 0077: título já liquidado
         if exc.status_code == 422 and ("0077" in error_msg or "já liquidado" in error_msg.lower()):
             stmt = select(Boleto).where(
                 Boleto.nosso_numero == nosso_numero,
@@ -706,6 +708,12 @@ async def baixar_boleto(
                 boleto_record.status = BoletoStatus.LIQUIDADO
                 if not boleto_record.data_liquidacao:
                     boleto_record.data_liquidacao = datetime.now(timezone.utc).date()
+                
+                # Track manual action even when syncing already-liquidated boleto
+                boleto_record.writeoff_type = WriteoffType.MANUAL_ADMIN
+                boleto_record.writeoff_by = admin.id
+                boleto_record.writeoff_reason = "Tentativa de baixa manual - boleto já liquidado no banco (sincronizado)"
+                
                 if boleto_record.invoice_id:
                     inv_result = await db.execute(
                         select(Invoice).where(Invoice.id == boleto_record.invoice_id)
@@ -714,16 +722,67 @@ async def baixar_boleto(
                     if linked_invoice and linked_invoice.status != InvoiceStatus.PAID:
                         linked_invoice.status = InvoiceStatus.PAID
                         linked_invoice.paid_at = datetime.now(timezone.utc)
+                
+                await log_audit(
+                    db=db,
+                    user_id=admin.id,
+                    company_id=admin.company_id,
+                    table_name="boletos",
+                    operation="BAIXA_MANUAL_SYNC_LIQUIDADO",
+                    resource_id=str(boleto_record.id),
+                    detail=f"Boleto {nosso_numero} - tentativa de baixa manual mas já estava liquidado no Sicredi. Status sincronizado. Admin: {admin.full_name or admin.email}",
+                )
+                
                 await db.commit()
                 logger.info(
                     "sicredi_boleto_baixa_already_liquidado_synced",
                     nosso_numero=nosso_numero,
+                    admin_id=str(admin.id),
                 )
             return {
                 "status": "already_liquidado",
                 "detail": "Boleto was already liquidated at Sicredi. Local status synchronized to LIQUIDADO.",
                 "nosso_numero": nosso_numero,
             }
+        
+        # Handle 0078: título já baixado
+        if exc.status_code == 422 and ("0078" in error_msg or "já baixado" in error_msg.lower()):
+            stmt = select(Boleto).where(
+                Boleto.nosso_numero == nosso_numero,
+                Boleto.company_id == admin.company_id,
+            )
+            db_result = await db.execute(stmt)
+            boleto_record = db_result.scalar_one_or_none()
+            if boleto_record and boleto_record.status != BoletoStatus.CANCELADO:
+                boleto_record.status = BoletoStatus.CANCELADO
+                
+                # Track manual action even when syncing already-baixado boleto
+                boleto_record.writeoff_type = WriteoffType.MANUAL_ADMIN
+                boleto_record.writeoff_by = admin.id
+                boleto_record.writeoff_reason = "Tentativa de baixa manual - boleto já baixado no banco (sincronizado)"
+                
+                await log_audit(
+                    db=db,
+                    user_id=admin.id,
+                    company_id=admin.company_id,
+                    table_name="boletos",
+                    operation="BAIXA_MANUAL_SYNC_CANCELADO",
+                    resource_id=str(boleto_record.id),
+                    detail=f"Boleto {nosso_numero} - tentativa de baixa manual mas já estava baixado no Sicredi. Status sincronizado. Admin: {admin.full_name or admin.email}",
+                )
+                
+                await db.commit()
+                logger.info(
+                    "sicredi_boleto_baixa_already_baixado_synced",
+                    nosso_numero=nosso_numero,
+                    admin_id=str(admin.id),
+                )
+            return {
+                "status": "already_baixado",
+                "detail": "Boleto was already cancelled (baixado) at Sicredi. Local status synchronized to CANCELADO.",
+                "nosso_numero": nosso_numero,
+            }
+        
         raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
 
     # Auto-update local DB status + track manual baixa
