@@ -24,6 +24,7 @@ from app.api.v1.admin import transfers as admin_transfers
 from app.api.v1.admin import early_payoff as admin_early_payoff
 from app.api.v1.admin import bank_statements as admin_bank_statements
 from app.api.v1.admin import financial_settings as admin_financial_settings
+from app.api.v1.admin import whatsapp as admin_whatsapp
 from app.api.v1.client import dashboard as client_dashboard
 from app.api.v1.client import documents as client_documents
 from app.api.v1.client import invoices as client_invoices
@@ -68,6 +69,7 @@ api_router.include_router(admin_transfers.router, prefix="/admin")
 api_router.include_router(admin_early_payoff.router, prefix="/admin")
 api_router.include_router(admin_bank_statements.router, prefix="/admin")
 api_router.include_router(admin_financial_settings.router, prefix="/admin")
+api_router.include_router(admin_whatsapp.router, prefix="/admin")
 
 # Client portal
 api_router.include_router(client_dashboard.router, prefix="/client")

@@ -179,6 +179,8 @@ async def _send_whatsapp_reminders_async():
                     name=client.full_name,
                     due_date=inv.due_date.isoformat(),
                     amount=str(inv.amount),
+                    db=db,
+                    company_id=client.company_id,
                 )
                 sent += 1
             except Exception as exc:
@@ -203,6 +205,8 @@ async def _send_whatsapp_reminders_async():
                     name=client.full_name,
                     due_date=inv.due_date.isoformat(),
                     amount=str(inv.amount),
+                    db=db,
+                    company_id=client.company_id,
                 )
                 sent += 1
             except Exception as exc:
@@ -227,6 +231,8 @@ async def _send_whatsapp_reminders_async():
                     name=client.full_name,
                     due_date=inv.due_date.isoformat(),
                     amount=str(inv.amount),
+                    db=db,
+                    company_id=client.company_id,
                 )
                 sent += 1
             except Exception as exc:
@@ -390,6 +396,8 @@ async def _overdue_escalation_async():
                                 f"foi rescindido automaticamente devido a {days_overdue} dias "
                                 f"de inadimplência. Entre em contato para regularização."
                             ),
+                            db=db,
+                            company_id=row.company_id,
                         )
 
                     # Admin alert

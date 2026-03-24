@@ -564,6 +564,226 @@ PATCH /api/v1/admin/lots/client-lots/{id}/financial-rules    → update rules
 
 ---
 
+## 10. WhatsApp Multi-Provider Integration
+
+> **Migration**: `008_whatsapp_credentials` | **SQL**: `sql/014_whatsapp_credentials.sql`
+
+O sistema suporta dois provedores de WhatsApp por empresa, configurados via painel admin. Ambos podem estar ativos simultaneamente. Apenas um é marcado como `is_default`.
+
+| Provedor | Tipo de mensagem | Gerenciamento de templates |
+|----------|-----------------|---------------------------|
+| **UAZAPI** | Texto livre | Não |
+| **Meta Cloud API** | Apenas templates aprovados | Sim (via admin) |
+
+---
+
+### 10.1 Endpoints de Credenciais
+
+**Base**: `/api/v1/admin/whatsapp`
+
+| Method | Path | Descrição |
+|--------|------|-----------|
+| `GET` | `/credentials/` | Listar credenciais da empresa |
+| `POST` | `/credentials/` | Criar credencial (UAZAPI ou META) |
+| `PATCH` | `/credentials/{id}` | Atualizar credencial |
+| `DELETE` | `/credentials/{id}` | Desativar credencial (soft delete) |
+| `POST` | `/credentials/{id}/set-default` | Definir como provedor padrão |
+| `GET` | `/credentials/{id}/status` | Verificar status de conexão |
+| `POST` | `/test-message` | Enviar mensagem de teste |
+
+---
+
+### 10.2 Endpoints de Templates (Meta Cloud API apenas)
+
+| Method | Path | Descrição |
+|--------|------|-----------|
+| `GET` | `/templates/` | Listar templates do WABA |
+| `POST` | `/templates/` | Criar novo template |
+| `GET` | `/templates/{name}` | Detalhes de um template |
+| `DELETE` | `/templates/{name}` | Deletar template |
+
+> Para todos os endpoints de template, pode-se passar `?credential_id=UUID` para especificar qual credencial Meta usar. Se omitido, usa a credencial META ativa da empresa.
+
+---
+
+### 10.3 Schemas
+
+#### Criar Credencial UAZAPI
+
+```typescript
+interface CreateUAZAPICredential {
+  provider: "UAZAPI";
+  uazapi_base_url: string;       // Ex: "https://api.uazapi.com"
+  uazapi_instance_token: string; // Token da instância
+  is_default?: boolean;
+}
+```
+
+#### Criar Credencial Meta Cloud API
+
+```typescript
+interface CreateMetaCredential {
+  provider: "META";
+  meta_waba_id: string;           // ID do WhatsApp Business Account
+  meta_phone_number_id: string;   // ID do número de telefone
+  meta_access_token: string;      // System User Access Token (permanente)
+  is_default?: boolean;
+}
+```
+
+#### Response: Credencial (tokens NUNCA expostos)
+
+```typescript
+interface WhatsAppCredentialResponse {
+  id: string;                      // UUID
+  company_id: string;
+  provider: "UAZAPI" | "META";
+  is_active: boolean;
+  is_default: boolean;
+
+  // UAZAPI: mostra base_url, nunca o token
+  uazapi_base_url?: string;
+
+  // Meta: mostra IDs, nunca o access_token
+  meta_waba_id?: string;
+  meta_phone_number_id?: string;
+
+  connection_status?: "connected" | "disconnected" | "connecting" | "unknown" | "error";
+  last_status_check?: string;      // ISO datetime
+  created_at: string;
+  updated_at: string;
+}
+```
+
+#### Response: Status de Conexão
+
+```typescript
+interface ConnectionStatusResponse {
+  connected: boolean;
+  status: string;               // "connected" | "disconnected" | "error" | "unknown"
+  profile_name?: string;        // Nome do perfil WhatsApp
+  phone_number?: string;        // Número conectado
+  error?: string;               // Descrição do erro, se houver
+}
+```
+
+#### Mensagem de Teste
+
+```typescript
+interface TestMessageRequest {
+  to: string;           // Número no formato internacional: "5511999999999"
+  body: string;         // Texto da mensagem (máx 4096 chars)
+  credential_id?: string; // UUID. Se omitido, usa o provedor padrão da empresa
+}
+```
+
+#### Criar Template (Meta)
+
+```typescript
+interface CreateTemplateRequest {
+  name: string;         // Apenas letras minúsculas, números e underscores
+  language: string;     // Ex: "pt_BR"
+  category: "UTILITY" | "MARKETING" | "AUTHENTICATION";
+  components: TemplateComponent[]; // Formato Meta API
+}
+
+interface TemplateResponse {
+  id?: string;
+  name: string;
+  status: "APPROVED" | "PENDING" | "REJECTED";
+  category: string;
+  language: string;
+  components: TemplateComponent[];
+}
+```
+
+---
+
+### 10.4 UI/UX Recomendado
+
+#### Página Admin — "Configurações WhatsApp" (`/admin/settings/whatsapp`)
+
+**Seção: Provedores Configurados**
+
+- Lista cards, um por credencial criada
+- Card mostra: ícone do provedor, status badge (Conectado / Desconectado / Desconhecido), badge "Padrão" se `is_default=true`, `base_url` (UAZAPI) ou `WABA ID` (Meta)
+- Botões no card: **Verificar Status**, **Definir como Padrão**, **Editar**, **Desativar**
+- Botão principal: **+ Adicionar Provedor**
+
+**Modal: Adicionar Provedor**
+
+1. Selecionar tipo: UAZAPI ou Meta Cloud API
+2. Se UAZAPI: campos `URL Base` + `Token da Instância` (input type=password)
+3. Se Meta: campos `WABA ID` + `Phone Number ID` + `Access Token` (input type=password)
+4. Toggle: "Definir como padrão"
+
+**Ação: Verificar Status**
+
+```
+GET /api/v1/admin/whatsapp/credentials/{id}/status
+```
+
+Exibir resultado em tempo real:
+- ✅ **Conectado** — mostrar nome do perfil e número
+- ❌ **Desconectado** — mostrar mensagem de erro
+- 🔄 **Verificando...** — loading state enquanto aguarda resposta
+
+**Ação: Enviar Mensagem de Teste**
+
+- Pequeno formulário inline no card: campo número + campo mensagem
+- Botão **Enviar Teste** → `POST /api/v1/admin/whatsapp/test-message`
+- Exibir toast de sucesso/erro
+
+---
+
+#### Página Admin — "Templates WhatsApp" (`/admin/settings/whatsapp/templates`)
+
+> Visível apenas se houver credencial META ativa.
+
+- Tabela: Nome, Categoria, Idioma, Status (badge colorido), Ações
+- Status badges: `APPROVED` = verde, `PENDING` = amarelo, `REJECTED` = vermelho
+- Botão **+ Criar Template**
+- Botão **Deletar** com confirmação
+
+**Modal: Criar Template**
+
+```
+Campos:
+- Nome (snake_case, validação regex ^[a-z0-9_]+$)
+- Idioma (dropdown: pt_BR, en_US, es_MX...)
+- Categoria (UTILITY | MARKETING | AUTHENTICATION)
+- Componentes (editor JSON ou builder visual)
+```
+
+> **Nota**: Após criar, o template entra em status `PENDING` e precisa de aprovação da Meta (pode levar até 24h). Só templates com status `APPROVED` podem ser enviados.
+
+---
+
+### 10.5 Fluxo de Configuração
+
+```
+1. Admin abre "Configurações WhatsApp"
+2. Clica em "+ Adicionar Provedor" → seleciona UAZAPI ou META
+3. Preenche as credenciais (base_url+token ou waba_id+phone_id+token)
+4. Salva → POST /api/v1/admin/whatsapp/credentials/
+5. Clica em "Verificar Status" → GET /credentials/{id}/status
+   - UAZAPI: mostra se a instância está conectada ao WhatsApp
+   - META: valida o access token e mostra o número verificado
+6. Clica "Definir como Padrão" se quiser que este provedor seja usado para notificações
+7. (META apenas) Vai em "Templates WhatsApp" e cria/gerencia templates
+```
+
+---
+
+### 10.6 Considerações de Segurança
+
+- **Tokens nunca são retornados** pela API — o response omite `uazapi_instance_token` e `meta_access_token`
+- Ao editar, enviar apenas o campo que mudou (PATCH parcial)
+- O campo `is_active` pode ser usado para desabilitar sem deletar
+- Máximo de **1 credencial por tipo** por empresa (ex: não é possível ter 2 credenciais UAZAPI na mesma empresa)
+
+---
+
 ## API Base URL
 
 All endpoints are prefixed with `/api/v1/`.

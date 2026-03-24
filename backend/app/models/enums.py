@@ -207,6 +207,11 @@ class NotificationType(str, enum.Enum):
     DISTRATO_AUTOMATICO = "DISTRATO_AUTOMATICO"
 
 
+class WhatsAppProviderType(str, enum.Enum):
+    UAZAPI = "UAZAPI"
+    META = "META"
+
+
 class IndexSource(str, enum.Enum):
     MANUAL = "MANUAL"
     BCB_API = "BCB_API"

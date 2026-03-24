@@ -39,12 +39,6 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = "noreply@example.com"
     SMTP_FROM_NAME: str = "CSApp"
 
-    # WhatsApp
-    WHATSAPP_PROVIDER: str = "twilio"
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_WHATSAPP_NUMBER: str = ""
-
     # Storage
     SUPABASE_STORAGE_BUCKET: str = "documents"
 
