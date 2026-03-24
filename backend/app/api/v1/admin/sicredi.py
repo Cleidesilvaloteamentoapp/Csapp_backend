@@ -18,9 +18,10 @@ from app.core.deps import get_company_admin
 from app.models.user import Profile
 from app.models.client import Client
 from app.models.boleto import Boleto
-from app.models.enums import ClientStatus, BoletoStatus
+from app.models.enums import ClientStatus, BoletoStatus, InvoiceStatus, WriteoffType
+from app.models.invoice import Invoice
 from sqlalchemy import select
-from datetime import date as dt_date
+from datetime import date as dt_date, datetime, timezone
 from app.schemas.sicredi import (
     AlterarDescontoAPIRequest,
     AlterarJurosAPIRequest,
@@ -597,6 +598,89 @@ async def consultar_boleto(
 # Boleto Instructions (Edit / Cancel)
 # ---------------------------------------------------------------------------
 
+@router.post("/boletos/{nosso_numero}/sync")
+async def sync_boleto_status(
+    nosso_numero: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Sync local boleto status with the current status reported by Sicredi.
+
+    Useful when the webhook was not received or processed (e.g. boleto was
+    liquidated at Sicredi but the local DB still shows NORMAL).
+    Maps Sicredi situacao → BoletoStatus and updates the boleto record plus
+    any linked invoice.
+    """
+    sicredi_client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+
+    try:
+        sicredi_data = await sicredi_client.boletos.consultar_por_nosso_numero(nosso_numero)
+        await sicredi_service.persist_token_cache(db, admin.company_id)
+    except SicrediError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
+
+    situacao = (sicredi_data.situacao or "").upper()
+
+    _SITUACAO_MAP = {
+        "LIQUIDADO": BoletoStatus.LIQUIDADO,
+        "BAIXADO": BoletoStatus.CANCELADO,
+        "VENCIDO": BoletoStatus.VENCIDO,
+        "NEGATIVADO": BoletoStatus.NEGATIVADO,
+        "NORMAL": BoletoStatus.NORMAL,
+    }
+    new_status = _SITUACAO_MAP.get(situacao)
+    if not new_status:
+        return {
+            "status": "noop",
+            "nosso_numero": nosso_numero,
+            "sicredi_situacao": sicredi_data.situacao,
+            "detail": f"Unknown situacao '{sicredi_data.situacao}'; no changes made.",
+        }
+
+    stmt = select(Boleto).where(
+        Boleto.nosso_numero == nosso_numero,
+        Boleto.company_id == admin.company_id,
+    )
+    db_result = await db.execute(stmt)
+    boleto_record = db_result.scalar_one_or_none()
+
+    if not boleto_record:
+        raise HTTPException(status_code=404, detail="Boleto not found in local database")
+
+    previous_status = boleto_record.status
+    boleto_record.status = new_status
+
+    if new_status == BoletoStatus.LIQUIDADO:
+        if not boleto_record.data_liquidacao:
+            boleto_record.data_liquidacao = datetime.now(timezone.utc).date()
+        if boleto_record.invoice_id:
+            inv_result = await db.execute(
+                select(Invoice).where(Invoice.id == boleto_record.invoice_id)
+            )
+            linked_invoice = inv_result.scalar_one_or_none()
+            if linked_invoice and linked_invoice.status != InvoiceStatus.PAID:
+                linked_invoice.status = InvoiceStatus.PAID
+                linked_invoice.paid_at = datetime.now(timezone.utc)
+
+    await db.commit()
+
+    logger.info(
+        "sicredi_boleto_sync",
+        nosso_numero=nosso_numero,
+        previous_status=previous_status.value if previous_status else None,
+        new_status=new_status.value,
+        sicredi_situacao=sicredi_data.situacao,
+    )
+
+    return {
+        "status": "synced",
+        "nosso_numero": nosso_numero,
+        "sicredi_situacao": sicredi_data.situacao,
+        "previous_local_status": previous_status.value if previous_status else None,
+        "new_local_status": new_status.value,
+    }
+
+
 @router.patch("/boletos/{nosso_numero}/baixa")
 async def baixar_boleto(
     nosso_numero: str,
@@ -610,9 +694,39 @@ async def baixar_boleto(
         result = await client.boletos.baixar(nosso_numero)
         await sicredi_service.persist_token_cache(db, admin.company_id)
     except SicrediError as exc:
+        error_msg = str(exc.detail or "")
+        if exc.status_code == 422 and ("0077" in error_msg or "já liquidado" in error_msg.lower()):
+            stmt = select(Boleto).where(
+                Boleto.nosso_numero == nosso_numero,
+                Boleto.company_id == admin.company_id,
+            )
+            db_result = await db.execute(stmt)
+            boleto_record = db_result.scalar_one_or_none()
+            if boleto_record and boleto_record.status != BoletoStatus.LIQUIDADO:
+                boleto_record.status = BoletoStatus.LIQUIDADO
+                if not boleto_record.data_liquidacao:
+                    boleto_record.data_liquidacao = datetime.now(timezone.utc).date()
+                if boleto_record.invoice_id:
+                    inv_result = await db.execute(
+                        select(Invoice).where(Invoice.id == boleto_record.invoice_id)
+                    )
+                    linked_invoice = inv_result.scalar_one_or_none()
+                    if linked_invoice and linked_invoice.status != InvoiceStatus.PAID:
+                        linked_invoice.status = InvoiceStatus.PAID
+                        linked_invoice.paid_at = datetime.now(timezone.utc)
+                await db.commit()
+                logger.info(
+                    "sicredi_boleto_baixa_already_liquidado_synced",
+                    nosso_numero=nosso_numero,
+                )
+            return {
+                "status": "already_liquidado",
+                "detail": "Boleto was already liquidated at Sicredi. Local status synchronized to LIQUIDADO.",
+                "nosso_numero": nosso_numero,
+            }
         raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
 
-    # Auto-update local DB status
+    # Auto-update local DB status + track manual baixa
     stmt = select(Boleto).where(
         Boleto.nosso_numero == nosso_numero,
         Boleto.company_id == admin.company_id,
@@ -621,8 +735,27 @@ async def baixar_boleto(
     boleto_record = db_result.scalar_one_or_none()
     if boleto_record:
         boleto_record.status = BoletoStatus.CANCELADO
+        boleto_record.writeoff_type = WriteoffType.MANUAL_ADMIN
+        boleto_record.writeoff_by = admin.id
+        boleto_record.writeoff_reason = "Baixa manual via admin (cancelamento)"
+        
+        await log_audit(
+            db=db,
+            user_id=admin.id,
+            company_id=admin.company_id,
+            table_name="boletos",
+            operation="BAIXA_MANUAL",
+            resource_id=str(boleto_record.id),
+            detail=f"Boleto {nosso_numero} cancelado manualmente pelo admin {admin.full_name or admin.email}",
+        )
+        
         await db.commit()
-        logger.info(f"Boleto {nosso_numero} local status updated to CANCELADO")
+        logger.info(
+            "sicredi_boleto_baixa_manual",
+            nosso_numero=nosso_numero,
+            admin_id=str(admin.id),
+            boleto_id=str(boleto_record.id),
+        )
 
     return {"status": "ok", "detail": "Boleto cancelled", "response": result}
 
