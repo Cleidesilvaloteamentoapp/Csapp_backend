@@ -17,11 +17,12 @@ from app.core.deps import get_company_admin
 from app.models.client import Client
 from app.models.client_lot import ClientLot
 from app.models.development import Development
-from app.models.enums import ClientLotStatus, InvoiceStatus, LotStatus
+from app.models.enums import AdjustmentFrequency, AdjustmentIndex, ClientLotStatus, InvoiceStatus, LotStatus
 from app.models.invoice import Invoice
 from app.models.lot import Lot
 from app.models.user import Profile
 from app.schemas.common import PaginatedResponse
+from app.schemas.financial_settings import ClientLotFinancialUpdate
 from app.schemas.lot import (
     ClientLotResponse,
     DevelopmentCreate,
@@ -237,6 +238,36 @@ async def assign_lot(
     financed_value = data.total_value - down_payment
     installment_value = financed_value / num_installments if num_installments > 0 else financed_value
 
+    # Load company financial defaults for fields not provided in the request
+    from app.models.company_financial_settings import CompanyFinancialSettings
+    cfs_row = await db.execute(
+        select(CompanyFinancialSettings).where(CompanyFinancialSettings.company_id == cid)
+    )
+    cfs = cfs_row.scalar_one_or_none()
+
+    # Resolve per-lot values: request → company defaults → hardcoded
+    penalty_rate = data.penalty_rate
+    if penalty_rate is None and cfs:
+        penalty_rate = cfs.penalty_rate
+
+    daily_interest_rate = data.daily_interest_rate
+    if daily_interest_rate is None and cfs:
+        daily_interest_rate = cfs.daily_interest_rate
+
+    adj_index = data.adjustment_index
+    if adj_index is None and cfs:
+        adj_index = cfs.adjustment_index.value if cfs.adjustment_index else None
+    adj_index_enum = AdjustmentIndex(adj_index) if adj_index else None
+
+    adj_freq = data.adjustment_frequency
+    if adj_freq is None and cfs:
+        adj_freq = cfs.adjustment_frequency.value if cfs.adjustment_frequency else None
+    adj_freq_enum = AdjustmentFrequency(adj_freq) if adj_freq else None
+
+    adj_custom_rate = data.adjustment_custom_rate
+    if adj_custom_rate is None and cfs:
+        adj_custom_rate = cfs.adjustment_custom_rate
+
     # Create client_lot with new contract fields
     cl = ClientLot(
         company_id=cid,
@@ -249,6 +280,11 @@ async def assign_lot(
         current_cycle=1,
         current_installment_value=installment_value,
         annual_adjustment_rate=data.annual_adjustment_rate or Decimal("0.05"),
+        penalty_rate=penalty_rate,
+        daily_interest_rate=daily_interest_rate,
+        adjustment_index=adj_index_enum,
+        adjustment_frequency=adj_freq_enum,
+        adjustment_custom_rate=adj_custom_rate,
         payment_plan=plan,
         status=ClientLotStatus.ACTIVE,
     )
@@ -284,6 +320,72 @@ async def assign_lot(
         resource_id=str(cl.id),
         detail=f"Lot {lot.lot_number} assigned to client {client.full_name}. "
                f"{first_cycle_count} invoices generated (cycle 1/{math.ceil(num_installments/12)})",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return ClientLotResponse.model_validate(cl)
+
+
+@router.get("/client-lots/{client_lot_id}", response_model=ClientLotResponse)
+async def get_client_lot(
+    client_lot_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Get a single client-lot with all financial fields."""
+    result = await db.execute(
+        select(ClientLot).where(
+            ClientLot.id == client_lot_id,
+            ClientLot.company_id == admin.company_id,
+        )
+    )
+    cl = result.scalar_one_or_none()
+    if not cl:
+        raise HTTPException(status_code=404, detail="Client lot not found")
+    return ClientLotResponse.model_validate(cl)
+
+
+@router.patch("/client-lots/{client_lot_id}/financial-rules", response_model=ClientLotResponse)
+async def update_client_lot_financial_rules(
+    client_lot_id: UUID,
+    data: ClientLotFinancialUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Update financial rules for a specific client-lot.
+
+    These per-lot values override the company's global defaults.
+    Send null for a field to clear the override (falls back to company default).
+    """
+    result = await db.execute(
+        select(ClientLot).where(
+            ClientLot.id == client_lot_id,
+            ClientLot.company_id == admin.company_id,
+        )
+    )
+    cl = result.scalar_one_or_none()
+    if not cl:
+        raise HTTPException(status_code=404, detail="Client lot not found")
+
+    updates = data.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        if field == "adjustment_index" and value is not None:
+            value = AdjustmentIndex(value)
+        elif field == "adjustment_frequency" and value is not None:
+            value = AdjustmentFrequency(value)
+        setattr(cl, field, value)
+
+    await db.flush()
+
+    await log_audit(
+        db,
+        user_id=admin.id,
+        company_id=admin.company_id,
+        table_name="client_lots",
+        operation="UPDATE",
+        resource_id=str(cl.id),
+        detail=f"Financial rules updated: {list(updates.keys())}",
         ip_address=request.client.host if request.client else None,
     )
 

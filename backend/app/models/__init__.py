@@ -24,3 +24,4 @@ from app.models.economic_index import EconomicIndex  # noqa: F401
 from app.models.cycle_approval import CycleApproval  # noqa: F401
 from app.models.contract_transfer import ContractTransfer  # noqa: F401
 from app.models.early_payoff_request import EarlyPayoffRequest  # noqa: F401
+from app.models.company_financial_settings import CompanyFinancialSettings  # noqa: F401

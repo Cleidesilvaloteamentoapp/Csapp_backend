@@ -74,8 +74,11 @@ async def _apply_annual_adjustments_async():
             if not all_paid:
                 continue
 
-            # Determine which index to use (per-lot or default IPCA)
-            index_type = cl.adjustment_index or AdjustmentIndex.IPCA
+            # Determine which index to use (3-tier: per-lot → company → IPCA)
+            from app.services.financial_defaults_service import (
+                get_effective_adjustment_index, get_effective_custom_rate,
+            )
+            index_type = await get_effective_adjustment_index(db, cl)
             cache_key = (index_type, cl.company_id)
 
             if cache_key not in index_cache:
@@ -94,10 +97,10 @@ async def _apply_annual_adjustments_async():
                 logger.warning("adjustment_skipped_no_index", cl_id=str(cl.id), index=index_type.value)
                 continue
 
-            # Calculate adjustment using per-lot custom rate or default 5%
+            # Calculate adjustment using 3-tier custom rate
             current_value = cl.current_installment_value or (cl.total_value / cl.total_installments)
-            custom_rate = cl.adjustment_custom_rate
-            fixed_rate_pct = Decimal(str(custom_rate * 100)) if custom_rate else Decimal(str(cl.annual_adjustment_rate or Decimal("0.05"))) * Decimal("100")
+            effective_custom_rate = await get_effective_custom_rate(db, cl)
+            fixed_rate_pct = Decimal(str(effective_custom_rate * 100))
 
             adj = calculate_adjusted_value(current_value, index_pct, fixed_rate_pct)
 

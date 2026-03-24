@@ -104,6 +104,11 @@ class LotAssignRequest(BaseModel):
     down_payment: Optional[Decimal] = Field(None, ge=0)
     total_installments: int = Field(1, ge=1, le=360)
     annual_adjustment_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Fixed annual rate on top of IPCA, default 0.05 (5%)")
+    penalty_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Custom penalty rate for this client-lot, e.g. 0.02 = 2%")
+    daily_interest_rate: Optional[Decimal] = Field(None, ge=0, le=0.01, description="Custom daily interest rate, e.g. 0.00033")
+    adjustment_index: Optional[str] = Field(None, pattern=r"^(IPCA|IGPM|CUB|INPC)$", description="Price index: IPCA, IGPM, CUB, INPC")
+    adjustment_frequency: Optional[str] = Field(None, pattern=r"^(MONTHLY|QUARTERLY|SEMIANNUAL|ANNUAL)$", description="Adjustment frequency")
+    adjustment_custom_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Custom fixed rate on top of index, e.g. 0.05 = 5%")
     payment_plan: Optional[Dict[str, Any]] = Field(
         None,
         description="Installment details, e.g. {'installments': 120, 'first_due': '2024-03-01'}",
@@ -126,6 +131,13 @@ class ClientLotResponse(BaseModel):
     annual_adjustment_rate: Optional[Decimal] = None
     last_adjustment_date: Optional[date] = None
     last_cycle_paid_at: Optional[date] = None
+    penalty_rate: Optional[Decimal] = None
+    daily_interest_rate: Optional[Decimal] = None
+    adjustment_index: Optional[str] = None
+    adjustment_frequency: Optional[str] = None
+    adjustment_custom_rate: Optional[Decimal] = None
+    previous_client_id: Optional[UUID] = None
+    transfer_date: Optional[date] = None
     payment_plan: Optional[Dict[str, Any]] = None
     status: str
     created_at: datetime

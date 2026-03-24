@@ -97,18 +97,22 @@ async def preview_segunda_via(
     if invoice.status not in (InvoiceStatus.OVERDUE, InvoiceStatus.PENDING):
         raise ValueError(f"Invoice is in status {invoice.status.value}, cannot issue second copy")
 
-    # Load per-lot rates if available
+    # Load per-lot rates with 3-tier fallback: per-lot → company → hardcoded
     from app.models.client_lot import ClientLot
+    from app.services.financial_defaults_service import get_effective_penalty_rate, get_effective_daily_interest_rate
     cl_row = await db.execute(
         select(ClientLot).where(ClientLot.id == invoice.client_lot_id)
     )
     client_lot = cl_row.scalar_one_or_none()
 
+    p_rate = await get_effective_penalty_rate(db, client_lot) if client_lot else PENALTY_RATE
+    i_rate = await get_effective_daily_interest_rate(db, client_lot) if client_lot else DAILY_INTEREST_RATE
+
     correction = calculate_correction(
         invoice.amount,
         invoice.due_date,
-        penalty_rate=client_lot.penalty_rate if client_lot else None,
-        daily_interest_rate=client_lot.daily_interest_rate if client_lot else None,
+        penalty_rate=p_rate,
+        daily_interest_rate=i_rate,
     )
     new_due_date = date.today() + timedelta(days=3)
 
@@ -148,8 +152,9 @@ async def issue_segunda_via(
     if invoice.status not in (InvoiceStatus.OVERDUE, InvoiceStatus.PENDING):
         raise ValueError(f"Invoice is in status {invoice.status.value}, cannot issue second copy")
 
-    # Get client_id from client_lot
+    # Get client_id from client_lot with 3-tier fallback rates
     from app.models.client_lot import ClientLot
+    from app.services.financial_defaults_service import get_effective_penalty_rate, get_effective_daily_interest_rate
     cl_row = await db.execute(
         select(ClientLot).where(ClientLot.id == invoice.client_lot_id)
     )
@@ -157,11 +162,14 @@ async def issue_segunda_via(
     if not client_lot:
         raise ValueError("Client lot not found for this invoice")
 
+    p_rate = await get_effective_penalty_rate(db, client_lot)
+    i_rate = await get_effective_daily_interest_rate(db, client_lot)
+
     correction = calculate_correction(
         invoice.amount,
         invoice.due_date,
-        penalty_rate=client_lot.penalty_rate,
-        daily_interest_rate=client_lot.daily_interest_rate,
+        penalty_rate=p_rate,
+        daily_interest_rate=i_rate,
     )
     due = new_due_date or (date.today() + timedelta(days=3))
 

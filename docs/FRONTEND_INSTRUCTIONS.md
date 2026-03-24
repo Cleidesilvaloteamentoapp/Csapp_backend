@@ -1,7 +1,7 @@
 # Frontend Instructions — Client Adjustments & Financial Management Enhancement
 
-> **Backend version**: migration `006_client_adjustments`
-> **Date**: March 2026
+> **Backend version**: migration `007_company_financial_settings`
+> **Date**: March 2026 (updated 2026-03-24)
 
 This document describes all new backend endpoints, schemas, and behavioral changes that the frontend team needs to implement.
 
@@ -17,6 +17,7 @@ This document describes all new backend endpoints, schemas, and behavioral chang
 6. [Permission Changes](#6-permission-changes)
 7. [Notification Types](#7-notification-types)
 8. [PWA Considerations](#8-pwa-considerations)
+9. [Per-Client Financial Rules & Global Defaults](#9-per-client-financial-rules--global-defaults)
 
 ---
 
@@ -357,6 +358,209 @@ New notification types the client portal should handle:
   - Overdue escalation alerts (30/60/90 days)
 - Service worker should cache API responses for dashboard stats and boleto lists
 - "Pagar Agora" button should work with deep links to banking apps when on mobile
+
+---
+
+## 9. Per-Client Financial Rules & Global Defaults
+
+This is the **core financial customization feature**. It allows the admin to:
+1. Set **global defaults** for the entire company (e.g., penalty 2%, interest 0.033%/day, IPCA index)
+2. **Override any rate per client-lot** ("ficha do cliente") — when set, it takes priority over the global default
+3. When neither is set, the system uses **hardcoded constants** as last resort
+
+**Fallback chain**: `Per-Lot Override → Company Default → Hardcoded Constant`
+
+### 9.1 Global Company Financial Defaults
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/admin/financial-settings/` | Get current global defaults (auto-creates with system defaults if first access) |
+| `PUT` | `/api/v1/admin/financial-settings/` | Update global defaults (only send fields you want to change) |
+
+**Request body** (`PUT`):
+```json
+{
+  "penalty_rate": 0.02,
+  "daily_interest_rate": 0.00033,
+  "adjustment_index": "IPCA",
+  "adjustment_frequency": "ANNUAL",
+  "adjustment_custom_rate": 0.05
+}
+```
+
+**Response** (`GET` and `PUT`):
+```typescript
+interface CompanyFinancialSettingsResponse {
+  id: string;
+  company_id: string;
+  penalty_rate: number;          // e.g. 0.02 = 2%
+  daily_interest_rate: number;   // e.g. 0.00033 = 0.033%/day
+  adjustment_index: 'IPCA' | 'IGPM' | 'CUB' | 'INPC';
+  adjustment_frequency: 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL';
+  adjustment_custom_rate: number; // e.g. 0.05 = 5% fixed rate on top of index
+  created_at: string;
+  updated_at: string;
+}
+```
+
+**UI needed**: Admin page "Configurações Financeiras" (or a tab inside Settings):
+- Form with 5 fields: multa (%), juros diários (%), índice de reajuste (dropdown), frequência (dropdown), taxa fixa (%)
+- Show current values on load (GET)
+- Save button calls PUT
+- Explain to the user: "Estes valores são usados como padrão para todos os clientes. Você pode sobrescrever individualmente na ficha de cada cliente."
+
+### 9.2 Per-Client-Lot Financial Rules (Override)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/admin/lots/client-lots/{id}` | Get client-lot details with all financial fields |
+| `PATCH` | `/api/v1/admin/lots/client-lots/{id}/financial-rules` | Update financial rules for this client-lot |
+
+**Request body** (`PATCH`):
+```json
+{
+  "penalty_rate": 0.03,
+  "daily_interest_rate": 0.0005,
+  "adjustment_index": "IGPM",
+  "adjustment_frequency": "SEMIANNUAL",
+  "adjustment_custom_rate": 0.08,
+  "annual_adjustment_rate": 0.05
+}
+```
+All fields are **optional**. Only send what you want to change. Send `null` to clear an override (falls back to company default).
+
+**Response**: Full `ClientLotResponse` (see 9.3).
+
+**UI needed**: On the "Ficha do Cliente" (client detail / client-lot detail page), add a **"Regras Financeiras"** section or tab:
+- Show current effective values for each field
+- Show whether each value is "Custom" (green badge) or "Padrão da empresa" (gray badge)
+- Edit button opens a form with the 6 fields
+- "Limpar" button next to each field to reset to company default (sends `null`)
+
+### 9.3 Updated ClientLotResponse
+
+The `ClientLotResponse` now includes all financial fields:
+
+```typescript
+interface ClientLotResponse {
+  id: string;
+  company_id: string;
+  client_id: string;
+  lot_id: string;
+  purchase_date: string;
+  total_value: number;
+  down_payment: number | null;
+  total_installments: number;
+  current_cycle: number;
+  current_installment_value: number | null;
+  annual_adjustment_rate: number | null;
+  last_adjustment_date: string | null;
+  last_cycle_paid_at: string | null;
+  // --- NEW FINANCIAL FIELDS ---
+  penalty_rate: number | null;          // null = using company default
+  daily_interest_rate: number | null;   // null = using company default
+  adjustment_index: 'IPCA' | 'IGPM' | 'CUB' | 'INPC' | null; // null = using company default
+  adjustment_frequency: 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL' | null;
+  adjustment_custom_rate: number | null; // null = using company default
+  previous_client_id: string | null;    // filled after contract transfer
+  transfer_date: string | null;
+  // ---
+  payment_plan: object | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+**Important**: A `null` value means "no per-client override — using company default". The frontend should:
+1. Load company defaults via `GET /admin/financial-settings/`
+2. For each field, if client-lot value is `null`, display the company default with a "(padrão)" label
+3. If client-lot value is set, display it with a "(customizado)" label
+
+### 9.4 Assign Lot with Financial Rules
+
+`POST /api/v1/admin/lots/assign` now accepts optional financial fields:
+
+```json
+{
+  "client_id": "uuid",
+  "lot_id": "uuid",
+  "purchase_date": "2026-01-15",
+  "total_value": 150000.00,
+  "down_payment": 15000.00,
+  "total_installments": 228,
+  "annual_adjustment_rate": 0.05,
+  "penalty_rate": 0.03,
+  "daily_interest_rate": 0.0005,
+  "adjustment_index": "IGPM",
+  "adjustment_frequency": "ANNUAL",
+  "adjustment_custom_rate": 0.06,
+  "payment_plan": { "first_due": "2026-02-15" }
+}
+```
+
+If financial fields are **omitted**, the backend automatically loads the company's global defaults. If no company defaults exist, hardcoded system constants are used.
+
+**UI needed**: On the "Atribuir Lote" form, add an expandable "Regras Financeiras" section:
+- Collapsed by default with text: "Usando regras padrão da empresa"
+- When expanded, shows the 5 financial fields pre-filled with company defaults
+- Admin can override any field for this specific client
+
+### 9.5 How the Fallback Works (Visual)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    RATE RESOLUTION                       │
+│                                                         │
+│  1. Check client_lot.penalty_rate  ──► Has value? USE IT│
+│                    │                                    │
+│                    ▼ (null)                              │
+│  2. Check company_financial_settings.penalty_rate ► USE  │
+│                    │                                    │
+│                    ▼ (no company settings)               │
+│  3. Use hardcoded constant: 0.02 (2%)            ► USE  │
+│                                                         │
+│  Same logic for: daily_interest_rate,                   │
+│  adjustment_index, adjustment_frequency,                │
+│  adjustment_custom_rate                                 │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 9.6 Hardcoded System Constants (Last Resort)
+
+| Field | Hardcoded Value | Description |
+|-------|----------------|-------------|
+| `penalty_rate` | `0.02` | 2% flat penalty |
+| `daily_interest_rate` | `0.00033` | ~1% per month (0.033%/day) |
+| `adjustment_index` | `IPCA` | Brazilian consumer price index |
+| `adjustment_frequency` | `ANNUAL` | Once per year |
+| `adjustment_custom_rate` | `0.05` | 5% fixed rate on top of index |
+
+### 9.7 Complete Frontend Flow
+
+**1. Admin configures company defaults (one-time setup):**
+```
+GET  /api/v1/admin/financial-settings/     → shows current defaults
+PUT  /api/v1/admin/financial-settings/     → updates defaults
+```
+
+**2. Admin assigns a lot to a client:**
+```
+POST /api/v1/admin/lots/assign
+  → Send financial fields to override, or omit to use company defaults
+  → Backend saves per-lot values (or null if using defaults)
+```
+
+**3. Admin edits a client's financial rules later:**
+```
+GET   /api/v1/admin/lots/client-lots/{id}                    → view current rules
+PATCH /api/v1/admin/lots/client-lots/{id}/financial-rules    → update rules
+```
+
+**4. System uses rules automatically:**
+- Segunda via (penalty + interest calculation)
+- Annual adjustments (index + fixed rate)
+- Cycle generation (installment value recalculation)
 
 ---
 
