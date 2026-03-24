@@ -80,6 +80,7 @@ class BoletoStatus(str, enum.Enum):
 class WriteoffType(str, enum.Enum):
     AUTOMATICA_BANCO = "AUTOMATICA_BANCO"
     MANUAL_ADMIN = "MANUAL_ADMIN"
+    BAIXA_EXTERNA = "BAIXA_EXTERNA"
 
 
 class AdjustmentIndex(str, enum.Enum):

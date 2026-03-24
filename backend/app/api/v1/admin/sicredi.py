@@ -18,7 +18,7 @@ from app.core.deps import get_company_admin
 from app.models.user import Profile
 from app.models.client import Client
 from app.models.boleto import Boleto
-from app.models.enums import ClientStatus, BoletoStatus, InvoiceStatus, WriteoffType
+from app.models.enums import ClientStatus, BoletoStatus, InvoiceStatus, WriteoffType, BoletoTag
 from app.models.invoice import Invoice
 from sqlalchemy import select
 from datetime import date as dt_date, datetime, timezone
@@ -624,11 +624,16 @@ async def sync_boleto_status(
     _SITUACAO_MAP = {
         "LIQUIDADO": BoletoStatus.LIQUIDADO,
         "BAIXADO": BoletoStatus.CANCELADO,
+        "BAIXADO POR SOLICITACAO": BoletoStatus.CANCELADO,
         "VENCIDO": BoletoStatus.VENCIDO,
         "NEGATIVADO": BoletoStatus.NEGATIVADO,
         "NORMAL": BoletoStatus.NORMAL,
     }
     new_status = _SITUACAO_MAP.get(situacao)
+    
+    # Track if this is an external baixa (not from our platform)
+    is_baixa_externa = situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO")
+    
     if not new_status:
         return {
             "status": "noop",
@@ -648,8 +653,14 @@ async def sync_boleto_status(
         raise HTTPException(status_code=404, detail="Boleto not found in local database")
 
     previous_status = boleto_record.status
+    previous_writeoff_type = boleto_record.writeoff_type
     boleto_record.status = new_status
-
+    
+    # Track external baixa - only mark if not already tracked as manual
+    if is_baixa_externa and previous_writeoff_type != WriteoffType.MANUAL_ADMIN:
+        boleto_record.writeoff_type = WriteoffType.BAIXA_EXTERNA
+        boleto_record.writeoff_reason = f"Baixa externa via Sicredi (situacao: {sicredi_data.situacao}). Sincronizado via endpoint /sync."
+    
     if new_status == BoletoStatus.LIQUIDADO:
         if not boleto_record.data_liquidacao:
             boleto_record.data_liquidacao = datetime.now(timezone.utc).date()
