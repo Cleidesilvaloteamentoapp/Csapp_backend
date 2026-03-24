@@ -739,9 +739,9 @@ async def baixar_boleto(
                     user_id=admin.id,
                     company_id=admin.company_id,
                     table_name="boletos",
-                    operation="BAIXA_MANUAL_SYNC_LIQUIDADO",
+                    operation="BAIXA_SYNC_LIQ",
                     resource_id=str(boleto_record.id),
-                    detail=f"Boleto {nosso_numero} - tentativa de baixa manual mas já estava liquidado no Sicredi. Status sincronizado. Admin: {admin.full_name or admin.email}",
+                    detail=f"Boleto {nosso_numero} ja liquidado no Sicredi. Sincronizado por admin.",
                 )
                 
                 await db.commit()
@@ -777,9 +777,9 @@ async def baixar_boleto(
                     user_id=admin.id,
                     company_id=admin.company_id,
                     table_name="boletos",
-                    operation="BAIXA_MANUAL_SYNC_CANCELADO",
+                    operation="BAIXA_SYNC_BAIXADO",
                     resource_id=str(boleto_record.id),
-                    detail=f"Boleto {nosso_numero} - tentativa de baixa manual mas já estava baixado no Sicredi. Status sincronizado. Admin: {admin.full_name or admin.email}",
+                    detail=f"Boleto {nosso_numero} ja baixado no Sicredi. Sincronizado por admin.",
                 )
                 
                 await db.commit()
