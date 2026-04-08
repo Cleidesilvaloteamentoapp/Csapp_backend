@@ -784,6 +784,264 @@ Campos:
 
 ---
 
+---
+
+## 11. Gestão de Ciclo de Boletos (12 em 12)
+
+> **Backend version**: migration `009_add_paid_installments`
+
+Esta seção descreve a lógica de criação de boletos em ciclos de 12, o alerta de renovação de ciclo para o admin e o fluxo de reajuste anual.
+
+---
+
+### 11.1 Lógica de Negócio
+
+O fluxo de boletos segue este padrão:
+
+```
+1. Cliente compra lote → contrato de N parcelas (ex: 220)
+2. Admin gera os primeiros 12 boletos (1° ciclo)
+3. Cliente paga as 12 parcelas → ciclo completo
+4. Sistema envia notificação ao admin: "Ciclo completo - gerar próximo lote"
+5. Admin define o percentual de reajuste e confirma
+6. Sistema gera mais 12 boletos com o novo valor reajustado (2° ciclo)
+7. Repete até zerar ou cancelar o contrato
+```
+
+**Regras importantes:**
+- Máximo **12 boletos por lote** (1 ciclo = 12 meses)
+- Sempre respeitar o total de parcelas restantes (nunca ultrapassar)
+- Cada ciclo pode ter um valor diferente (reajuste anual)
+
+---
+
+### 11.2 Novos Endpoints
+
+| Method | Path | Descrição |
+|--------|------|-----------|
+| `GET` | `/api/v1/admin/lots/client-lots/{id}/installments` | Info de parcelas (total, pagas, restantes) |
+| `POST` | `/api/v1/admin/lots/client-lots/{id}/generate-next-batch?adjustment_rate=0.05` | Prepara próximo ciclo com reajuste |
+| `POST` | `/api/v1/admin/sicredi/boletos/batch` | Cria boletos (max 12 por chamada) |
+
+---
+
+### 11.3 Resposta — GET /installments
+
+```json
+{
+  "client_lot_id": "uuid",
+  "total_installments": 220,
+  "paid_installments": 12,
+  "remaining_installments": 208,
+  "current_cycle": 1,
+  "next_cycle_number": 2,
+  "installments_in_current_cycle": 12,
+  "is_legacy_client": false,
+  "current_installment_value": 850.00
+}
+```
+
+**Campos:**
+- `total_installments`: Total de parcelas do contrato
+- `paid_installments`: Quantas já foram pagas
+- `remaining_installments`: Quantas faltam
+- `current_cycle`: Ciclo atual (1, 2, 3...)
+- `installments_in_current_cycle`: Pagas no ciclo atual (de 0 a 12)
+- `is_legacy_client`: `true` se o cliente foi cadastrado manualmente (antes do sistema)
+
+---
+
+### 11.4 Resposta — POST /generate-next-batch
+
+```json
+{
+  "status": "ready_for_batch",
+  "client_lot_id": "uuid",
+  "current_cycle": 2,
+  "previous_installment_value": 850.00,
+  "new_installment_value": 892.50,
+  "adjustment_rate": 0.05,
+  "remaining_installments": 208,
+  "message": "Ciclo 2 preparado. Valor atualizado para R$ 892.50. Use o endpoint de criação de lotes para gerar os 12 boletos."
+}
+```
+
+---
+
+### 11.5 TypeScript Interfaces
+
+```typescript
+interface InstallmentInfo {
+  client_lot_id: string;
+  total_installments: number;
+  paid_installments: number;
+  remaining_installments: number;
+  current_cycle: number;
+  next_cycle_number: number;
+  installments_in_current_cycle: number;
+  is_legacy_client: boolean;
+  current_installment_value: number | null;
+}
+
+interface GenerateNextBatchResponse {
+  status: 'ready_for_batch';
+  client_lot_id: string;
+  current_cycle: number;
+  previous_installment_value: number;
+  new_installment_value: number;
+  adjustment_rate: number;
+  remaining_installments: number;
+  message: string;
+}
+
+// Notificação de ciclo completo recebida via notificações
+interface CyclePendingNotification {
+  type: 'CICLO_PENDENTE';
+  data: {
+    client_lot_id: string;
+    client_id: string;
+    current_cycle: number;
+    next_cycle: number;
+    remaining_installments: number;
+    action: 'generate_next_batch';
+  };
+}
+```
+
+---
+
+### 11.6 UI/UX — Cadastro de Cliente (Modal de Atribuição de Lote)
+
+No modal de atribuição de lote ao cliente, adicionar campo:
+
+```
+[ ] Cliente já tinha parcelas pagas antes do sistema
+    Se marcado:
+    → Número de parcelas já pagas: [___]
+```
+
+**Campos obrigatórios:**
+- `total_installments`: Total de parcelas do contrato
+- `paid_installments` *(condicional)*: Parcelas pagas antes do sistema (somente para clientes antigos)
+
+**Regra de validação:**
+- `paid_installments` < `total_installments`
+- `paid_installments` mínimo 0
+
+---
+
+### 11.7 UI/UX — Card de Informações de Parcelas
+
+Exibir no card/detalhe do contrato do cliente:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Parcelas do Contrato                                │
+│                                                     │
+│  Total: 220        Pagas: 12       Restantes: 208   │
+│                                                     │
+│  Progresso: [████░░░░░░░░░░░░░░░░░░] 5.5%           │
+│                                                     │
+│  Ciclo atual: 1     Valor atual: R$ 850,00          │
+│  Parcelas no ciclo: 12/12  ✅ Ciclo completo        │
+└─────────────────────────────────────────────────────┘
+```
+
+**Indicadores:**
+- Progresso visual: `paid / total * 100`
+- Badge "Ciclo completo" quando `installments_in_current_cycle == 12`
+- Badge "Próximo lote pronto" quando `remaining_installments > 0 && installments_in_current_cycle == 12`
+
+---
+
+### 11.8 UI/UX — Notificação de Ciclo Completo (Admin)
+
+Quando o admin receber uma notificação do tipo `CICLO_PENDENTE`:
+
+1. **No sino de notificações:** mostrar badge com contador
+2. **Ao clicar na notificação:** abrir modal "Renovar Ciclo"
+
+**Modal "Renovar Ciclo":**
+
+```
+┌───────────────────────────────────────────────────────┐
+│  🔔 Ciclo 1 Completo — João Silva                     │
+│                                                       │
+│  Parcelas restantes: 208 de 220                       │
+│  Valor atual:  R$ 850,00                              │
+│                                                       │
+│  Reajuste para o ciclo 2:                             │
+│  [  5.00  ] %    ← input numérico (casas decimais)    │
+│                                                       │
+│  Novo valor estimado: R$ 892,50                       │  ← atualiza em tempo real
+│                                                       │
+│  [Cancelar]              [Confirmar e Gerar Lote]     │
+└───────────────────────────────────────────────────────┘
+```
+
+**Ao clicar "Confirmar e Gerar Lote":**
+
+```typescript
+// Passo 1: Preparar o próximo ciclo com reajuste
+const prepare = await api.post(
+  `/admin/lots/client-lots/${clientLotId}/generate-next-batch`,
+  null,
+  { params: { adjustment_rate: adjustmentRate / 100 } }
+);
+
+// Passo 2: Criar os 12 boletos via batch
+const batch = await api.post('/admin/sicredi/boletos/batch', {
+  client_id: clientId,
+  pagador: pagadorData,
+  valor: prepare.new_installment_value,
+  frequency: 'MENSAL',
+  duration_months: Math.min(12, prepare.remaining_installments),
+  data_primeiro_vencimento: nextDueDate,
+  // ... outros campos financeiros
+});
+```
+
+**Estados da UI:**
+- Loading durante as chamadas
+- Sucesso: "✅ 12 boletos gerados para o ciclo 2"
+- Erro: mostrar mensagem do backend (ex: "Ciclo ainda não está completo")
+
+---
+
+### 11.9 UI/UX — Limitação Visual de 12 Boletos
+
+No formulário de criação de lote de boletos:
+
+- Campo `duration_months` com `max=12`
+- Aviso fixo: "⚠️ Máximo de 12 boletos por lote (1 ciclo)"
+- Se o cliente tiver menos de 12 parcelas restantes, sugerir o número exato:
+
+```typescript
+const suggestedDuration = Math.min(12, remainingInstallments);
+```
+
+---
+
+### 11.10 Verificação Automática de Lote Disponível (Polling / Notificação)
+
+A notificação `CICLO_PENDENTE` é criada automaticamente pela task Celery que roda diariamente. O frontend pode:
+
+**Opção A — Notificações push (recomendada):** Escutar a notificação via polling no endpoint:
+```
+GET /api/v1/client/notifications/
+```
+Filtrar por `type = CICLO_PENDENTE` e `is_read = false`.
+
+**Opção B — Badge no card do cliente:**
+```typescript
+// Verificar se ciclo está completo ao carregar detalhe do contrato
+const info = await api.get(`/admin/lots/client-lots/${id}/installments`);
+const cycleComplete = info.installments_in_current_cycle >= 12 && info.remaining_installments > 0;
+```
+Se `cycleComplete`, mostrar botão "Gerar Próximo Lote" no card.
+
+---
+
 ## API Base URL
 
 All endpoints are prefixed with `/api/v1/`.

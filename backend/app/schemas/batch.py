@@ -26,7 +26,7 @@ class BatchCriarBoletosRequest(BaseModel):
         description="Billing frequency",
     )
     duration_months: int = Field(
-        12, ge=1, le=120, description="Total duration in months (default 12)"
+        12, ge=1, le=12, description="Total duration in months (max 12 = one cycle)"
     )
     data_primeiro_vencimento: date = Field(
         ..., description="Due date of the first installment"
@@ -53,7 +53,7 @@ class BatchCriarBoletosRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_installment_count(self):
-        """Ensure duration / frequency produces at least 1 and at most 120 installments."""
+        """Ensure duration / frequency produces at least 1 and at most 12 installments (one cycle)."""
         freq_months = {"MENSAL": 1, "TRIMESTRAL": 3, "SEMESTRAL": 6, "ANUAL": 12}
         interval = freq_months.get(self.frequency, 1)
         count = self.duration_months // interval
@@ -62,9 +62,9 @@ class BatchCriarBoletosRequest(BaseModel):
                 f"Duration {self.duration_months} months with frequency "
                 f"{self.frequency} produces 0 installments"
             )
-        if count > 120:
+        if count > 12:
             raise ValueError(
-                f"Maximum 120 installments allowed, got {count}"
+                f"Maximum 12 installments allowed (one cycle), got {count}"
             )
         return self
 

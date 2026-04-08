@@ -22,6 +22,8 @@ from app.models.invoice import Invoice
 from app.models.lot import Lot
 from app.models.user import Profile
 from app.schemas.common import PaginatedResponse
+from app.services import client_lot_service
+from app.services.client_lot_service import get_remaining_installments, should_generate_next_batch
 from app.schemas.financial_settings import ClientLotFinancialUpdate
 from app.schemas.lot import (
     ClientLotResponse,
@@ -390,3 +392,127 @@ async def update_client_lot_financial_rules(
     )
 
     return ClientLotResponse.model_validate(cl)
+
+
+@router.post("/client-lots/{client_lot_id}/generate-next-batch")
+async def generate_next_batch(
+    client_lot_id: UUID,
+    adjustment_rate: float = Query(..., ge=0, le=1, description="Adjustment rate (e.g., 0.05 for 5%)"),
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Generate next batch of 12 installments with adjustment.
+
+    This endpoint is called when a cycle is complete and the admin wants
+    to generate the next 12 boletos with an annual adjustment applied.
+
+    The client lot's current_cycle will be incremented and the
+    current_installment_value will be updated with the adjustment.
+    """
+    # Verify client lot exists
+    result = await db.execute(
+        select(ClientLot).where(
+            ClientLot.id == client_lot_id,
+            ClientLot.company_id == admin.company_id,
+        )
+    )
+    cl = result.scalar_one_or_none()
+    if not cl:
+        raise HTTPException(status_code=404, detail="Client lot not found")
+
+    # Check if ready for next batch
+    should_gen, reason = await should_generate_next_batch(db, client_lot_id)
+    if not should_gen:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not ready for next batch: {reason}",
+        )
+
+    # Get installment info
+    info = await get_remaining_installments(db, client_lot_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="Could not calculate installment info")
+
+    # Calculate new value with adjustment
+    current_value = cl.current_installment_value
+    if not current_value:
+        total_installments = cl.total_installments or 1
+        current_value = cl.total_value / total_installments
+
+    new_value = current_value * Decimal(str(1 + adjustment_rate))
+    new_value = new_value.quantize(Decimal("0.01"))
+
+    # Update client lot
+    cl.current_cycle += 1
+    cl.current_installment_value = new_value
+    cl.last_adjustment_date = date.today()
+
+    await db.commit()
+
+    logger.info(
+        "generate_next_batch",
+        client_lot_id=str(client_lot_id),
+        admin_id=str(admin.id),
+        new_cycle=cl.current_cycle,
+        previous_value=float(current_value),
+        new_value=float(new_value),
+        adjustment_rate=adjustment_rate,
+    )
+
+    return {
+        "status": "ready_for_batch",
+        "client_lot_id": str(client_lot_id),
+        "current_cycle": cl.current_cycle,
+        "previous_installment_value": float(current_value),
+        "new_installment_value": float(new_value),
+        "adjustment_rate": adjustment_rate,
+        "remaining_installments": info.remaining_installments,
+        "message": (
+            f"Ciclo {cl.current_cycle} preparado. Valor atualizado para R$ {new_value}. "
+            f"Use o endpoint de criação de lotes para gerar os 12 boletos."
+        ),
+    }
+
+
+@router.get("/client-lots/{client_lot_id}/installments")
+async def get_client_lot_installments(
+    client_lot_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(get_company_admin),
+):
+    """Get installment information for a client lot.
+
+    Returns:
+        - total_installments: Total number of installments in the contract
+        - paid_installments: Number of installments already paid
+        - remaining_installments: Number of installments remaining
+        - current_cycle: Current 12-installment cycle
+        - next_cycle_number: Next cycle number
+        - installments_in_current_cycle: Paid installments in current cycle
+        - is_legacy_client: Whether this client uses manual paid_installments count
+    """
+    result = await db.execute(
+        select(ClientLot).where(
+            ClientLot.id == client_lot_id,
+            ClientLot.company_id == admin.company_id,
+        )
+    )
+    cl = result.scalar_one_or_none()
+    if not cl:
+        raise HTTPException(status_code=404, detail="Client lot not found")
+
+    info = await get_remaining_installments(db, client_lot_id)
+    if not info:
+        raise HTTPException(status_code=500, detail="Could not calculate installment info")
+
+    return {
+        "client_lot_id": str(client_lot_id),
+        "total_installments": info.total_installments,
+        "paid_installments": info.paid_installments,
+        "remaining_installments": info.remaining_installments,
+        "current_cycle": info.current_cycle,
+        "next_cycle_number": info.next_cycle_number,
+        "installments_in_current_cycle": info.installments_in_current_cycle,
+        "is_legacy_client": info.is_legacy_client,
+        "current_installment_value": float(cl.current_installment_value) if cl.current_installment_value else None,
+    }

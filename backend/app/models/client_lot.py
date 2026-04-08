@@ -33,6 +33,10 @@ class ClientLot(Base, TenantMixin, TimestampMixin):
     total_value: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     down_payment: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True, default=0)
     total_installments: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    paid_installments: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=0,
+        comment="Manual count of paid installments for legacy clients (before system tracking)"
+    )
     current_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     current_installment_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
     annual_adjustment_rate: Mapped[Optional[Decimal]] = mapped_column(
