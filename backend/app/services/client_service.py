@@ -5,7 +5,9 @@ from typing import Optional
 import math
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
@@ -90,11 +92,49 @@ async def create_client(
             hashed_password=hash_password(data.password),
         )
         db.add(profile)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError as e:
+            await db.rollback()
+            error_msg = str(e.orig) if e.orig else str(e)
+            if "cpf_cnpj" in error_msg or "ix_profiles_cpf_cnpj" in error_msg:
+                raise HTTPException(
+                    status_code=409,
+                    detail="CPF/CNPJ já cadastrado. Verifique se o cliente já existe."
+                )
+            elif "email" in error_msg or "ix_profiles_email" in error_msg:
+                raise HTTPException(
+                    status_code=409,
+                    detail="E-mail já cadastrado. Verifique se o cliente já existe."
+                )
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Dado duplicado. Verifique se o cliente já existe."
+                )
         client.profile_id = profile.id
 
     db.add(client)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as e:
+        await db.rollback()
+        error_msg = str(e.orig) if e.orig else str(e)
+        if "cpf_cnpj" in error_msg or "ix_clients_cpf_cnpj" in error_msg:
+            raise HTTPException(
+                status_code=409,
+                detail="CPF/CNPJ já cadastrado. Verifique se o cliente já existe."
+            )
+        elif "email" in error_msg or "ix_clients_email" in error_msg:
+            raise HTTPException(
+                status_code=409,
+                detail="E-mail já cadastrado. Verifique se o cliente já existe."
+            )
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="Dado duplicado. Verifique se o cliente já existe."
+            )
     logger.info("client_created", client_id=str(client.id), company_id=str(company_id))
     return client
 
