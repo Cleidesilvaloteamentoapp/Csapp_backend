@@ -17,7 +17,7 @@ from app.core.deps import get_company_admin
 from app.models.client import Client
 from app.models.client_lot import ClientLot
 from app.models.development import Development
-from app.models.enums import AdjustmentFrequency, AdjustmentIndex, ClientLotStatus, InvoiceStatus, LotStatus
+from app.models.enums import AdjustmentFrequency, AdjustmentIndex, ClientLotStatus, InvoiceStatus, LotStatus, PropertyType
 from app.models.invoice import Invoice
 from app.models.lot import Lot
 from app.models.user import Profile
@@ -28,6 +28,7 @@ from app.schemas.financial_settings import ClientLotFinancialUpdate
 from app.schemas.lot import (
     ClientLotResponse,
     DevelopmentCreate,
+    DevelopmentFilter,
     DevelopmentResponse,
     DevelopmentUpdate,
     LotAssignRequest,
@@ -47,16 +48,81 @@ dev_router = APIRouter(prefix="/developments", tags=["Admin Developments"])
 
 @dev_router.get("/", response_model=list[DevelopmentResponse])
 async def list_developments(
+    property_type: Optional[PropertyType] = Query(None, description="Filter by property type"),
+    name: Optional[str] = Query(None, description="Filter by name (partial match)"),
+    location: Optional[str] = Query(None, description="Filter by location (partial match)"),
+    min_price: Optional[Decimal] = Query(None, ge=0, description="Minimum price"),
+    max_price: Optional[Decimal] = Query(None, ge=0, description="Maximum price"),
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(get_company_admin),
 ):
-    """List developments for the current company."""
-    rows = await db.execute(
-        select(Development)
-        .where(Development.company_id == admin.company_id)
-        .order_by(Development.created_at.desc())
-    )
+    """List developments for the current company with optional filters."""
+    query = select(Development).where(Development.company_id == admin.company_id)
+
+    # Apply filters
+    if property_type:
+        query = query.where(Development.property_type == property_type)
+    if name:
+        query = query.where(Development.name.ilike(f"%{name}%"))
+    if location:
+        query = query.where(Development.location.ilike(f"%{location}%"))
+    if min_price is not None:
+        query = query.where(Development.price >= min_price)
+    if max_price is not None:
+        query = query.where(Development.price <= max_price)
+
+    query = query.order_by(Development.created_at.desc())
+    rows = await db.execute(query)
     return [DevelopmentResponse.model_validate(d) for d in rows.scalars().all()]
+
+
+def _validate_development_data(data: DevelopmentCreate | DevelopmentUpdate, is_update: bool = False) -> None:
+    """Validate development data based on property type."""
+    errors = []
+
+    # Get property type, handling both create and update scenarios
+    if hasattr(data, 'property_type') and data.property_type is not None:
+        property_type = data.property_type
+    elif is_update:
+        return  # Skip validation on partial update if property_type not provided
+    else:
+        property_type = PropertyType.LOT
+
+    # Lot-specific validations
+    if property_type == PropertyType.LOT:
+        if not is_update or hasattr(data, 'lot_number') and data.lot_number is not None:
+            if not data.lot_number:
+                errors.append("Número do lote é obrigatório para lotes")
+        if not is_update or hasattr(data, 'area_m2') and data.area_m2 is not None:
+            if not data.area_m2:
+                errors.append("Área é obrigatória para lotes")
+
+    # Residential validations (House/Apartment)
+    elif property_type in [PropertyType.HOUSE, PropertyType.APARTMENT]:
+        if not is_update or hasattr(data, 'bedrooms') and data.bedrooms is not None:
+            if not data.bedrooms:
+                errors.append("Número de quartos é obrigatório para imóveis residenciais")
+        if not is_update or hasattr(data, 'bathrooms') and data.bathrooms is not None:
+            if not data.bathrooms:
+                errors.append("Número de banheiros é obrigatório para imóveis residenciais")
+        if not is_update or hasattr(data, 'construction_area_m2') and data.construction_area_m2 is not None:
+            if not data.construction_area_m2:
+                errors.append("Área construída é obrigatória para imóveis residenciais")
+
+    # Commercial validations
+    elif property_type == PropertyType.COMMERCIAL:
+        if not is_update or hasattr(data, 'construction_area_m2') and data.construction_area_m2 is not None:
+            if not data.construction_area_m2:
+                errors.append("Área construída é obrigatória para imóveis comerciais")
+
+    # Rural validations
+    elif property_type == PropertyType.RURAL:
+        if not is_update or hasattr(data, 'area_m2') and data.area_m2 is not None:
+            if not data.area_m2:
+                errors.append("Área total é obrigatória para imóveis rurais")
+
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
 
 
 @dev_router.post("/", response_model=DevelopmentResponse, status_code=status.HTTP_201_CREATED)
@@ -66,6 +132,7 @@ async def create_development(
     admin: Profile = Depends(get_company_admin),
 ):
     """Create a new development."""
+    _validate_development_data(data)
     dev = Development(company_id=admin.company_id, **data.model_dump())
     db.add(dev)
     await db.flush()
@@ -106,6 +173,9 @@ async def update_development(
     dev = result.scalar_one_or_none()
     if not dev:
         raise HTTPException(status_code=404, detail="Development not found")
+
+    _validate_development_data(data, is_update=True)
+
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(dev, k, v)
     await db.flush()

@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.enums import PropertyType
+
 
 # ---------------------------------------------------------------------------
 # Development
@@ -19,7 +21,24 @@ class DevelopmentCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
     description: Optional[str] = None
     location: Optional[str] = None
+    property_type: PropertyType = PropertyType.LOT
     documents: Optional[Dict[str, Any]] = None
+
+    # Lot-specific fields
+    block: Optional[str] = Field(None, max_length=50)
+    lot_number: Optional[str] = Field(None, max_length=50)
+    area_m2: Optional[Decimal] = Field(None, gt=0)
+
+    # Residential-specific fields
+    bedrooms: Optional[int] = Field(None, ge=0)
+    bathrooms: Optional[int] = Field(None, ge=0)
+    suites: Optional[int] = Field(None, ge=0)
+    parking_spaces: Optional[int] = Field(None, ge=0)
+    construction_area_m2: Optional[Decimal] = Field(None, gt=0)
+    total_area_m2: Optional[Decimal] = Field(None, gt=0)
+
+    # General fields
+    price: Optional[Decimal] = Field(None, gt=0)
 
 
 class DevelopmentUpdate(BaseModel):
@@ -28,7 +47,24 @@ class DevelopmentUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=255)
     description: Optional[str] = None
     location: Optional[str] = None
+    property_type: Optional[PropertyType] = None
     documents: Optional[Dict[str, Any]] = None
+
+    # Lot-specific fields
+    block: Optional[str] = Field(None, max_length=50)
+    lot_number: Optional[str] = Field(None, max_length=50)
+    area_m2: Optional[Decimal] = Field(None, gt=0)
+
+    # Residential-specific fields
+    bedrooms: Optional[int] = Field(None, ge=0)
+    bathrooms: Optional[int] = Field(None, ge=0)
+    suites: Optional[int] = Field(None, ge=0)
+    parking_spaces: Optional[int] = Field(None, ge=0)
+    construction_area_m2: Optional[Decimal] = Field(None, gt=0)
+    total_area_m2: Optional[Decimal] = Field(None, gt=0)
+
+    # General fields
+    price: Optional[Decimal] = Field(None, gt=0)
 
 
 class DevelopmentResponse(BaseModel):
@@ -39,11 +75,38 @@ class DevelopmentResponse(BaseModel):
     name: str
     description: Optional[str] = None
     location: Optional[str] = None
+    property_type: PropertyType
     documents: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 
+    # Lot-specific fields
+    block: Optional[str] = None
+    lot_number: Optional[str] = None
+    area_m2: Optional[Decimal] = None
+
+    # Residential-specific fields
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[int] = None
+    suites: Optional[int] = None
+    parking_spaces: Optional[int] = None
+    construction_area_m2: Optional[Decimal] = None
+    total_area_m2: Optional[Decimal] = None
+
+    # General fields
+    price: Optional[Decimal] = None
+
     model_config = ConfigDict(from_attributes=True)
+
+
+class DevelopmentFilter(BaseModel):
+    """Filter parameters for listing developments."""
+
+    property_type: Optional[PropertyType] = None
+    name: Optional[str] = None
+    location: Optional[str] = None
+    min_price: Optional[Decimal] = None
+    max_price: Optional[Decimal] = None
 
 
 # ---------------------------------------------------------------------------

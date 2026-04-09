@@ -216,3 +216,11 @@ class WhatsAppProviderType(str, enum.Enum):
 class IndexSource(str, enum.Enum):
     MANUAL = "MANUAL"
     BCB_API = "BCB_API"
+
+
+class PropertyType(str, enum.Enum):
+    LOT = "LOT"
+    HOUSE = "HOUSE"
+    APARTMENT = "APARTMENT"
+    COMMERCIAL = "COMMERCIAL"
+    RURAL = "RURAL"
