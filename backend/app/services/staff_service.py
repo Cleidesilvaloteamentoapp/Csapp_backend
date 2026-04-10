@@ -5,6 +5,7 @@ from typing import List
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.security import hash_password
 from app.models.enums import UserRole
@@ -25,7 +26,9 @@ async def _get_staff_in_company(
     staff_id: uuid.UUID, company_id: uuid.UUID, db: AsyncSession
 ) -> Profile:
     result = await db.execute(
-        select(Profile).where(
+        select(Profile)
+        .options(selectinload(Profile.staff_permission))
+        .where(
             Profile.id == staff_id,
             Profile.company_id == company_id,
             Profile.role == UserRole.STAFF,
@@ -39,7 +42,9 @@ async def _get_staff_in_company(
 
 async def list_staff(company_id: uuid.UUID, db: AsyncSession) -> List[Profile]:
     result = await db.execute(
-        select(Profile).where(
+        select(Profile)
+        .options(selectinload(Profile.staff_permission))
+        .where(
             Profile.company_id == company_id,
             Profile.role == UserRole.STAFF,
         )
@@ -86,7 +91,13 @@ async def create_staff(
     db.add(permission)
     await db.flush()
 
-    await db.refresh(profile)
+    # Recarregar profile com staff_permission
+    result = await db.execute(
+        select(Profile)
+        .options(selectinload(Profile.staff_permission))
+        .where(Profile.id == profile.id)
+    )
+    profile = result.scalar_one()
     logger.info("staff_created", staff_id=str(profile.id), company_id=str(company_id))
     return profile
 
@@ -126,7 +137,14 @@ async def update_staff(
             db.add(perm)
 
     await db.flush()
-    await db.refresh(profile)
+    
+    # Recarregar profile com staff_permission
+    result = await db.execute(
+        select(Profile)
+        .options(selectinload(Profile.staff_permission))
+        .where(Profile.id == profile.id)
+    )
+    profile = result.scalar_one()
     logger.info("staff_updated", staff_id=str(staff_id), company_id=str(company_id))
     return profile
 

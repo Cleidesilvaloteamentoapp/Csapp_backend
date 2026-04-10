@@ -36,7 +36,7 @@ class Profile(Base, TenantMixin, TimestampMixin):
     # Relationships
     company = relationship("Company", back_populates="profiles", lazy="selectin")
     staff_permission = relationship(
-        "StaffPermission", back_populates="profile", uselist=False, lazy="selectin"
+        "StaffPermission", back_populates="profile", uselist=False, lazy="noload"
     )
 
     def __repr__(self) -> str:

@@ -146,15 +146,24 @@ def require_permission(permission: str):
             if hasattr(current_user.role, "value")
             else current_user.role
         )
+        # SUPER_ADMIN e COMPANY_ADMIN têm acesso total sem verificar permissões
         if user_role in (UserRole.SUPER_ADMIN.value, UserRole.COMPANY_ADMIN.value):
             return current_user
+        
+        # Outros roles (não STAFF) não têm acesso
         if user_role != UserRole.STAFF.value:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
             )
         
-        perm = current_user.staff_permission
+        # Carregar staff_permission explicitamente para STAFF
+        from app.models.staff_permission import StaffPermission
+        result = await db.execute(
+            select(StaffPermission).where(StaffPermission.profile_id == current_user.id)
+        )
+        perm = result.scalar_one_or_none()
+        
         if perm is None or not getattr(perm, permission, False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
