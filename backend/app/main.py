@@ -18,6 +18,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.tenant import TenantMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from app.utils.exceptions import (
     AuthenticationError,
     InsufficientPermissionsError,
@@ -30,6 +31,22 @@ from app.utils.exceptions import (
 from app.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
+
+
+# DEBUG MIDDLEWARE - Remover depois
+class DebugHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if "/admin/clients" in str(request.url):
+            logger.info(f"[DEBUG HEADERS] Path: {request.url.path}")
+            logger.info(f"[DEBUG HEADERS] Method: {request.method}")
+            logger.info(f"[DEBUG HEADERS] All headers:")
+            for key, value in request.headers.items():
+                if key.lower() == "authorization":
+                    logger.info(f"  {key}: {value[:50]}... [FOUND AUTHORIZATION]")
+                else:
+                    logger.info(f"  {key}: {value}")
+        response = await call_next(request)
+        return response
 
 
 @asynccontextmanager
@@ -61,6 +78,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Middleware (order matters – outermost first)
 # ---------------------------------------------------------------------------
 
+# DEBUG: adicionar primeiro para ver headers brutos
+app.add_middleware(DebugHeadersMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 # CORS deve vir ANTES do TenantMiddleware para processar headers corretamente
@@ -68,9 +87,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],  # Permitir todos os headers para debugging
-    expose_headers=["*"],
+    allow_methods=["*"],  # Permitir todos os métodos
+    allow_headers=["*"],  # Permitir todos os headers
+    expose_headers=["*"],  # Expor todos os headers
+    max_age=3600,  # Cache preflight por 1 hora
 )
 app.add_middleware(TenantMiddleware)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.ALLOWED_HOSTS)
