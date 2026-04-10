@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Optional, Dict, List
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class ClientCreate(BaseModel):
@@ -20,7 +20,14 @@ class ClientCreate(BaseModel):
     address: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
     create_access: bool = Field(False, description="Create login credentials for the client")
-    password: Optional[str] = Field(None, min_length=8, max_length=128)
+    password: Optional[str] = Field(None, max_length=128)
+
+    @model_validator(mode='after')
+    def validate_password(self):
+        """Validate password only when create_access is True."""
+        if self.create_access and (not self.password or len(self.password) < 8):
+            raise ValueError("Senha deve ter no mínimo 8 caracteres quando o acesso ao portal está ativado")
+        return self
 
 
 class ClientUpdate(BaseModel):
