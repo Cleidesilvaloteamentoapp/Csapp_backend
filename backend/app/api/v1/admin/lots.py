@@ -46,7 +46,8 @@ dev_router = APIRouter(prefix="/developments", tags=["Admin Developments"])
 # ---------------------------------------------------------------------------
 
 
-@dev_router.get("/", response_model=list[DevelopmentResponse])
+@dev_router.get("", response_model=list[DevelopmentResponse])
+@dev_router.get("/", response_model=list[DevelopmentResponse], include_in_schema=False)
 async def list_developments(
     property_type: Optional[PropertyType] = Query(None, description="Filter by property type"),
     name: Optional[str] = Query(None, description="Filter by name (partial match)"),

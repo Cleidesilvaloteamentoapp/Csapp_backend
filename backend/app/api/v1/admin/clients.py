@@ -25,7 +25,8 @@ from app.utils.exceptions import StorageError
 router = APIRouter(prefix="/clients", tags=["Admin Clients"])
 
 
-@router.get("/", response_model=PaginatedResponse[ClientResponse])
+@router.get("", response_model=PaginatedResponse[ClientResponse])
+@router.get("/", response_model=PaginatedResponse[ClientResponse], include_in_schema=False)
 async def list_clients(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),

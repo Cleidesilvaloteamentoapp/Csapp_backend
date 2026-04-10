@@ -49,6 +49,21 @@ class DebugHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Middleware para normalizar trailing slashes SEM redirect (evita perder Authorization)
+class NormalizeSlashesMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Se a URL termina com /, remove (exceto para a raiz)
+        if len(request.url.path) > 1 and request.url.path.endswith("/"):
+            # Reescrever o path no request (não é redirect)
+            new_path = request.url.path.rstrip("/")
+            scope = request.scope
+            scope["path"] = new_path
+            # Reconstruir request com novo path
+            request = Request(scope, request.receive)
+        response = await call_next(request)
+        return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown events."""
@@ -69,6 +84,7 @@ app = FastAPI(
     docs_url=None if settings.is_production else "/docs",
     redoc_url=None if settings.is_production else "/redoc",
     openapi_url=None if settings.is_production else "/openapi.json",
+    redirect_slashes=False,  # CRÍTICO: evita redirect que perde Authorization header
 )
 
 app.state.limiter = limiter
@@ -80,6 +96,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # DEBUG: adicionar primeiro para ver headers brutos
 app.add_middleware(DebugHeadersMiddleware)
+# Normalizar trailing slashes SEM redirect (evita perder Authorization header)
+app.add_middleware(NormalizeSlashesMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 # CORS deve vir ANTES do TenantMiddleware para processar headers corretamente
