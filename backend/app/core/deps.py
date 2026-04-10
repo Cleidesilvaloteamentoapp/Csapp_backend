@@ -20,7 +20,16 @@ from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-bearer_scheme = HTTPBearer(auto_error=False)
+# Custom bearer scheme that logs authorization header
+class DebugHTTPBearer(HTTPBearer):
+    async def __call__(self, request: Request):
+        auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+        logger.info(f"[BEARER] Raw auth header: {auth_header[:50] if auth_header else 'NONE'}...")
+        result = await super().__call__(request)
+        logger.info(f"[BEARER] Parsed credentials: {result is not None}")
+        return result
+
+bearer_scheme = DebugHTTPBearer(auto_error=False)
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +65,13 @@ async def get_current_user(
 ) -> Profile:
     """Decode the bearer token, load the profile, and populate request.state
     so that the TenantMiddleware can pick it up."""
+    # DEBUG: Log headers
+    logger.info(f"[AUTH] Path: {request.url.path}")
+    logger.info(f"[AUTH] Authorization header: {request.headers.get('authorization', 'NOT PRESENT')[:50]}...")
+    logger.info(f"[AUTH] Credentials from bearer_scheme: {credentials is not None}")
+    
     if credentials is None:
+        logger.warning(f"[AUTH] Missing credentials for path: {request.url.path}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication token",
@@ -146,8 +161,11 @@ def require_permission(permission: str):
             if hasattr(current_user.role, "value")
             else current_user.role
         )
+        logger.info(f"[PERMISSION] Checking '{permission}' for user {current_user.id} with role: {user_role}")
+        
         # SUPER_ADMIN e COMPANY_ADMIN têm acesso total sem verificar permissões
         if user_role in (UserRole.SUPER_ADMIN.value, UserRole.COMPANY_ADMIN.value):
+            logger.info(f"[PERMISSION] BYPASS granted for {user_role}")
             return current_user
         
         # Outros roles (não STAFF) não têm acesso

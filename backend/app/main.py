@@ -63,14 +63,16 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(TenantMiddleware)
+# CORS deve vir ANTES do TenantMiddleware para processar headers corretamente
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    allow_headers=["*"],  # Permitir todos os headers para debugging
+    expose_headers=["*"],
 )
+app.add_middleware(TenantMiddleware)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=settings.ALLOWED_HOSTS)
 if settings.is_production:
     app.add_middleware(
