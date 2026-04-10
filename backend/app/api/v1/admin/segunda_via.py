@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.user import Profile
 from app.services import segunda_via_service
 
@@ -26,7 +26,7 @@ class SegundaViaRequest(BaseModel):
 async def preview_segunda_via(
     invoice_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Preview corrected amount for an overdue invoice (penalty + interest)."""
     try:
@@ -53,7 +53,7 @@ async def issue_segunda_via(
     data: SegundaViaRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Issue a second copy boleto with automatic penalty/interest calculation.
 

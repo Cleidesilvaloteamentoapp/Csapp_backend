@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.enums import ServiceRequestStatus
 from app.models.service_request import ServiceRequest, ServiceRequestMessage
 from app.models.user import Profile
@@ -51,7 +51,7 @@ async def list_all_requests(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("view_service_requests")),
 ):
     """List all service requests for the company."""
     base = select(ServiceRequest).where(ServiceRequest.company_id == user.company_id)
@@ -80,7 +80,7 @@ async def list_all_requests(
 @router.get("/stats")
 async def request_stats(
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("view_service_requests")),
 ):
     """Get counts by status for the company."""
     rows = await db.execute(
@@ -96,7 +96,7 @@ async def request_stats(
 async def get_request_detail(
     request_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("view_service_requests")),
 ):
     """Get service request details with ALL messages (including internal)."""
     row = await db.execute(
@@ -127,7 +127,7 @@ async def update_request(
     body: ServiceRequestAdminUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("manage_service_requests")),
 ):
     """Update service request status, priority, or assignment."""
     row = await db.execute(
@@ -178,7 +178,7 @@ async def admin_add_message(
     body: ServiceRequestMessageCreate,
     is_internal: bool = Query(False, description="Mark message as internal (not visible to client)"),
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("manage_service_requests")),
 ):
     """Add an admin message to a service request."""
     row = await db.execute(

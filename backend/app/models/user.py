@@ -1,10 +1,9 @@
-from typing import Optional
-
 """Profile model – extends Supabase auth.users with app-specific data."""
 
 import uuid
+from typing import Optional
 
-from sqlalchemy import Enum as SAEnum
+from sqlalchemy import Boolean, Enum as SAEnum
 from sqlalchemy import String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -32,9 +31,13 @@ class Profile(Base, TenantMixin, TimestampMixin):
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     # Relationships
     company = relationship("Company", back_populates="profiles", lazy="selectin")
+    staff_permission = relationship(
+        "StaffPermission", back_populates="profile", uselist=False, lazy="selectin"
+    )
 
     def __repr__(self) -> str:
         return f"<Profile {self.full_name} role={self.role.value}>"

@@ -22,6 +22,7 @@ class UserRole(str, Enum):
     SUPER_ADMIN = "SUPER_ADMIN"
     COMPANY_ADMIN = "COMPANY_ADMIN"
     CLIENT = "CLIENT"
+    STAFF = "STAFF"
 
 
 # ---------------------------------------------------------------------------

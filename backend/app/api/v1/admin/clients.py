@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.client_lot import ClientLot
 from app.models.invoice import Invoice
 from app.models.user import Profile
@@ -32,7 +32,7 @@ async def list_clients(
     status_filter: Optional[str] = Query(None, alias="status"),
     search: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_clients")),
 ):
     """List clients with pagination and filters."""
     params = PaginationParams(page=page, per_page=per_page)
@@ -46,7 +46,7 @@ async def create_client(
     data: ClientCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
 ):
     """Create a new client."""
     client = await client_service.create_client(db, admin.company_id, admin.id, data)
@@ -65,7 +65,7 @@ async def create_client(
 async def get_client(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_clients")),
 ):
     """Get client details."""
     client = await client_service.get_client(db, admin.company_id, client_id)
@@ -78,7 +78,7 @@ async def update_client(
     data: ClientUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
 ):
     """Update client data."""
     client = await client_service.update_client(db, admin.company_id, client_id, data)
@@ -97,7 +97,7 @@ async def delete_client(
     client_id: UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
 ):
     """Deactivate (soft-delete) a client."""
     await client_service.deactivate_client(db, admin.company_id, client_id)
@@ -114,7 +114,7 @@ async def delete_client(
 async def get_client_lots(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_clients")),
 ):
     """List lots belonging to a client."""
     # Ensure client belongs to this company
@@ -132,7 +132,7 @@ async def get_client_lots(
 async def get_client_invoices(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """List invoices for a client (via their client_lots)."""
     await client_service.get_client(db, admin.company_id, client_id)
@@ -152,7 +152,7 @@ async def get_client_invoices(
 async def get_client_documents(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_documents")),
 ):
     """List document URLs for a client."""
     client = await client_service.get_client(db, admin.company_id, client_id)
@@ -165,7 +165,7 @@ async def upload_client_document(
     client_id: UUID,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_documents")),
 ):
     """Upload a document for a client."""
     client = await client_service.get_client(db, admin.company_id, client_id)

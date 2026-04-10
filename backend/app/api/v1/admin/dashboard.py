@@ -9,7 +9,7 @@ from sqlalchemy import func, select, extract, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.client import Client
 from app.models.client_lot import ClientLot
 from app.models.enums import (
@@ -37,7 +37,7 @@ router = APIRouter(prefix="/dashboard", tags=["Admin Dashboard"])
 @router.get("/stats", response_model=AdminStats)
 async def get_stats(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """General statistics for the admin dashboard."""
     cid = admin.company_id
@@ -99,7 +99,7 @@ async def get_stats(
 @router.get("/financial-overview", response_model=FinancialOverview)
 async def financial_overview(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Financial summary: receivable, received, overdue."""
     cid = admin.company_id
@@ -138,7 +138,7 @@ async def financial_overview(
 @router.get("/recent-activities", response_model=list[RecentActivity])
 async def recent_activities(
     limit: int = Query(10, ge=1, le=50),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Placeholder – returns an empty list until activity tracking is wired."""
     return []
@@ -148,7 +148,7 @@ async def recent_activities(
 async def revenue_chart(
     months: int = Query(6, ge=1, le=12),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Monthly revenue for the last N months."""
     cid = admin.company_id
@@ -179,7 +179,7 @@ async def revenue_chart(
 @router.get("/charts/services", response_model=list[ServiceChartPoint])
 async def services_chart(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Most requested service types."""
     cid = admin.company_id
@@ -198,7 +198,7 @@ async def services_chart(
 @router.get("/defaulters", response_model=list[DefaulterDetailResponse])
 async def list_defaulters(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):

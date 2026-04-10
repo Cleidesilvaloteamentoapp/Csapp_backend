@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.user import Profile
 from app.models.client import Client
 from app.models.boleto import Boleto
@@ -107,7 +107,7 @@ def _build_beneficiario_final(b) -> BeneficiarioFinal:
 async def create_credential(
     payload: SicrediCredentialCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Register Sicredi API credentials for the company."""
     cred = await sicredi_service.create_credential(
@@ -127,7 +127,7 @@ async def create_credential(
 @router.get("/credentials", response_model=SicrediCredentialResponse)
 async def get_credential(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Get the active Sicredi credential for the company."""
     cred = await sicredi_service.get_credential(db, admin.company_id)
@@ -141,7 +141,7 @@ async def update_credential(
     credential_id: str,
     payload: SicrediCredentialUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Update Sicredi API credentials."""
     from uuid import UUID as _UUID
@@ -158,7 +158,7 @@ async def update_credential(
 async def delete_credential(
     credential_id: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Deactivate Sicredi credentials."""
     from uuid import UUID as _UUID
@@ -173,7 +173,7 @@ async def delete_credential(
 async def criar_boleto(
     payload: CriarBoletoAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Create a new boleto (traditional or hybrid with Pix QR Code)."""
     sicredi_client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -298,7 +298,7 @@ async def criar_boleto(
 async def batch_criar_boletos(
     payload: BatchCriarBoletosRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Create multiple boletos in batch with configurable frequency and duration.
 
@@ -376,7 +376,7 @@ async def batch_criar_boletos(
 async def batch_operacao_boletos(
     payload: BatchOperationRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Execute a bulk action on multiple existing boletos.
 
@@ -453,7 +453,7 @@ async def batch_operacao_boletos(
 async def get_batch_status(
     batch_id: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Get the status and progress of a batch operation."""
     from uuid import UUID as _UUID
@@ -509,7 +509,7 @@ async def get_batch_status(
 async def consultar_boleto_seu_numero(
     seu_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Query a registered boleto by its seuNumero."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -527,7 +527,7 @@ async def consultar_boleto_seu_numero(
 async def consultar_liquidados_dia(
     dia: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Query boletos liquidated on a specific date (DD/MM/YYYY)."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -545,7 +545,7 @@ async def consultar_liquidados_dia(
 async def gerar_pdf_boleto(
     linha_digitavel: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Generate a PDF (second copy) of a boleto from its linhaDigitavel."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -567,7 +567,7 @@ async def gerar_pdf_boleto(
 async def consultar_boleto(
     nosso_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Query a boleto by its nossoNumero."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -602,7 +602,7 @@ async def consultar_boleto(
 async def sync_boleto_status(
     nosso_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Sync local boleto status with the current status reported by Sicredi.
 
@@ -696,7 +696,7 @@ async def sync_boleto_status(
 async def baixar_boleto(
     nosso_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Cancel (baixa) a boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -834,7 +834,7 @@ async def baixar_boleto(
 async def negativar_boleto(
     nosso_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Request negativation for an overdue boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -864,7 +864,7 @@ async def negativar_boleto(
 async def sustar_negativacao_baixar_boleto(
     nosso_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Cancel negativation and simultaneously cancel (baixa) the boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -895,7 +895,7 @@ async def alterar_vencimento(
     nosso_numero: str,
     payload: AlterarVencimentoAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Change the due date of a boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -917,7 +917,7 @@ async def alterar_seu_numero(
     nosso_numero: str,
     payload: AlterarSeuNumeroAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Change the internal control number of a boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -939,7 +939,7 @@ async def alterar_desconto(
     nosso_numero: str,
     payload: AlterarDescontoAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Change discount values of a boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -965,7 +965,7 @@ async def alterar_juros(
     nosso_numero: str,
     payload: AlterarJurosAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Change interest rate of a boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -987,7 +987,7 @@ async def conceder_abatimento(
     nosso_numero: str,
     payload: ConcederAbatimentoAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Grant an abatement on a boleto."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -1008,7 +1008,7 @@ async def conceder_abatimento(
 async def cancelar_abatimento(
     nosso_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Cancel a previously granted abatement."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -1030,7 +1030,7 @@ async def cancelar_abatimento(
 async def criar_webhook_contrato(
     payload: WebhookContratoAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Register a webhook contract with Sicredi."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -1060,7 +1060,7 @@ async def criar_webhook_contrato(
 @router.get("/webhook/contratos")
 async def consultar_webhook_contratos(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Query existing webhook contracts."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)
@@ -1079,7 +1079,7 @@ async def alterar_webhook_contrato(
     id_contrato: str,
     payload: WebhookContratoAPIRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
     """Update an existing webhook contract."""
     client = await sicredi_service.get_sicredi_client(db, admin.company_id)

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.enums import WhatsAppProviderType
 from app.models.user import Profile
 from app.schemas.whatsapp import (
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 @router.get("/credentials/", response_model=list[WhatsAppCredentialResponse])
 async def list_credentials(
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """List all WhatsApp credentials for the current company."""
     return await cred_svc.list_credentials(db, current_user.company_id)
@@ -58,7 +58,7 @@ async def list_credentials(
 async def create_credential(
     payload: WhatsAppCredentialCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Create a new WhatsApp credential (UAZAPI or META)."""
     try:
@@ -108,7 +108,7 @@ async def update_credential(
     credential_id: UUID,
     payload: WhatsAppCredentialUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Update an existing WhatsApp credential."""
     updates = payload.model_dump(exclude_unset=True)
@@ -144,7 +144,7 @@ async def update_credential(
 async def delete_credential(
     credential_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Deactivate (soft delete) a WhatsApp credential."""
     try:
@@ -168,7 +168,7 @@ async def delete_credential(
 async def set_default_credential(
     credential_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Set a credential as the default WhatsApp provider for the company."""
     try:
@@ -188,7 +188,7 @@ async def set_default_credential(
 async def check_connection_status(
     credential_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Check the connection status of a WhatsApp provider."""
     try:
@@ -222,7 +222,7 @@ async def check_connection_status(
 async def send_test_message(
     payload: WhatsAppTestMessage,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Send a test WhatsApp message via the company's configured provider."""
     try:
@@ -274,7 +274,7 @@ async def list_templates(
     credential_id: UUID | None = None,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """List WhatsApp message templates from Meta Cloud API."""
     try:
@@ -309,7 +309,7 @@ async def create_template(
     payload: WhatsAppTemplateCreate,
     credential_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Create a new WhatsApp message template in Meta Cloud API."""
     try:
@@ -344,7 +344,7 @@ async def get_template(
     template_name: str,
     credential_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Get details of a specific WhatsApp message template."""
     try:
@@ -376,7 +376,7 @@ async def delete_template(
     template_name: str,
     credential_id: UUID | None = None,
     db: AsyncSession = Depends(get_db),
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
 ):
     """Delete a WhatsApp message template from Meta Cloud API."""
     try:

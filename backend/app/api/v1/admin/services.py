@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.enums import ServiceOrderStatus
 from app.models.service import ServiceOrder, ServiceType
 from app.models.user import Profile
@@ -37,7 +37,7 @@ router = APIRouter(prefix="/services", tags=["Admin Services"])
 @router.get("/types", response_model=list[ServiceTypeResponse])
 async def list_service_types(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """List service types for the company."""
     rows = await db.execute(
@@ -52,7 +52,7 @@ async def list_service_types(
 async def create_service_type(
     data: ServiceTypeCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Create a new service type."""
     st = ServiceType(company_id=admin.company_id, **data.model_dump())
@@ -66,7 +66,7 @@ async def update_service_type(
     type_id: UUID,
     data: ServiceTypeUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Update a service type."""
     result = await db.execute(
@@ -96,7 +96,7 @@ async def list_orders(
     status_filter: Optional[str] = Query(None, alias="status"),
     client_id: Optional[UUID] = None,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """List service orders with filters."""
     base = select(ServiceOrder).where(ServiceOrder.company_id == admin.company_id)
@@ -123,7 +123,7 @@ async def list_orders(
 async def get_order(
     order_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Get service order details."""
     result = await db.execute(
@@ -142,7 +142,7 @@ async def update_order_status(
     order_id: UUID,
     data: ServiceOrderStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Update the status of a service order."""
     result = await db.execute(
@@ -166,7 +166,7 @@ async def update_order_financial(
     order_id: UUID,
     data: ServiceOrderFinancialUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Update cost / revenue of a service order."""
     result = await db.execute(
@@ -189,7 +189,7 @@ async def update_order_financial(
 @router.get("/analytics")
 async def service_analytics(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Cost vs revenue analysis for services."""
     cid = admin.company_id

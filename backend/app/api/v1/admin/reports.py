@@ -11,7 +11,7 @@ from sqlalchemy import select, func, and_, extract
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.client import Client
 from app.models.client_lot import ClientLot
 from app.models.contract_history import ContractHistory
@@ -34,7 +34,7 @@ async def monthly_closure(
     year: int = Query(..., ge=2020, le=2100),
     month: int = Query(..., ge=1, le=12),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_reports")),
 ):
     """Monthly closure report with financial summary, notifications, and cancellations.
 
@@ -198,7 +198,7 @@ async def monthly_closure_csv(
     year: int = Query(..., ge=2020, le=2100),
     month: int = Query(..., ge=1, le=12),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_reports")),
 ):
     """Export paid invoices for a given month as CSV for accounting."""
     import csv
@@ -260,7 +260,7 @@ async def cancellations_csv(
     year: int = Query(..., ge=2020, le=2100),
     month: int = Query(..., ge=1, le=12),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_reports")),
 ):
     """Export cancelled invoices and rescissions for tax write-offs."""
     import csv

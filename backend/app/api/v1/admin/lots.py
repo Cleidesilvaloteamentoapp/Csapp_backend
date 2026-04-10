@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.client import Client
 from app.models.client_lot import ClientLot
 from app.models.development import Development
@@ -54,7 +54,7 @@ async def list_developments(
     min_price: Optional[Decimal] = Query(None, ge=0, description="Minimum price"),
     max_price: Optional[Decimal] = Query(None, ge=0, description="Maximum price"),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_lots")),
 ):
     """List developments for the current company with optional filters."""
     query = select(Development).where(Development.company_id == admin.company_id)
@@ -129,7 +129,7 @@ def _validate_development_data(data: DevelopmentCreate | DevelopmentUpdate, is_u
 async def create_development(
     data: DevelopmentCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_lots")),
 ):
     """Create a new development."""
     _validate_development_data(data)
@@ -143,7 +143,7 @@ async def create_development(
 async def get_development(
     dev_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_lots")),
 ):
     """Get development details."""
     result = await db.execute(
@@ -162,7 +162,7 @@ async def update_development(
     dev_id: UUID,
     data: DevelopmentUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_lots")),
 ):
     """Update a development."""
     result = await db.execute(
@@ -194,7 +194,7 @@ async def list_lots(
     development_id: Optional[UUID] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_lots")),
 ):
     """List lots with pagination and filters."""
     base = select(Lot).where(Lot.company_id == admin.company_id)
@@ -219,7 +219,7 @@ async def list_lots(
 async def create_lot(
     data: LotCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_lots")),
 ):
     """Create a new lot."""
     # Validate development belongs to company
@@ -242,7 +242,7 @@ async def create_lot(
 async def get_lot(
     lot_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_lots")),
 ):
     """Get lot details."""
     result = await db.execute(
@@ -259,7 +259,7 @@ async def update_lot(
     lot_id: UUID,
     data: LotUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_lots")),
 ):
     """Update a lot."""
     result = await db.execute(
@@ -282,7 +282,7 @@ async def assign_lot(
     data: LotAssignRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_lots")),
 ):
     """Assign a lot to a client: creates client_lot + generates invoices."""
     cid = admin.company_id
@@ -402,7 +402,7 @@ async def assign_lot(
 async def get_client_lot(
     client_lot_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_lots")),
 ):
     """Get a single client-lot with all financial fields."""
     result = await db.execute(
@@ -423,7 +423,7 @@ async def update_client_lot_financial_rules(
     data: ClientLotFinancialUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_lots")),
 ):
     """Update financial rules for a specific client-lot.
 
@@ -469,7 +469,7 @@ async def generate_next_batch(
     client_lot_id: UUID,
     adjustment_rate: float = Query(..., ge=0, le=1, description="Adjustment rate (e.g., 0.05 for 5%)"),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Generate next batch of 12 installments with adjustment.
 
@@ -548,7 +548,7 @@ async def generate_next_batch(
 async def get_client_lot_installments(
     client_lot_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_lots")),
 ):
     """Get installment information for a client lot.
 

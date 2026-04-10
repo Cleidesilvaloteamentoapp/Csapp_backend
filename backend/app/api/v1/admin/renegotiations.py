@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.enums import RenegotiationStatus
 from app.models.renegotiation import Renegotiation
 from app.models.user import Profile
@@ -33,7 +33,7 @@ async def list_renegotiations(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_renegotiations")),
 ):
     """List renegotiations with optional filters."""
     stmt = select(Renegotiation).where(Renegotiation.company_id == admin.company_id)
@@ -57,7 +57,7 @@ async def get_debt_summary(
     client_id: UUID,
     client_lot_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_renegotiations")),
 ):
     """Calculate current overdue debt for a client contract."""
     debt = await renegotiation_service.calculate_debt(
@@ -76,7 +76,7 @@ async def get_debt_summary(
 async def create_renegotiation(
     data: RenegotiationCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_renegotiations")),
 ):
     """Create a renegotiation proposal for overdue debt."""
     try:
@@ -101,7 +101,7 @@ async def create_renegotiation(
 async def get_renegotiation(
     renego_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_renegotiations")),
 ):
     """Get renegotiation details."""
     row = await db.execute(
@@ -121,7 +121,7 @@ async def approve_renegotiation(
     renego_id: UUID,
     data: RenegotiationApprove,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_renegotiations")),
 ):
     """Approve or reject a renegotiation proposal."""
     try:
@@ -139,7 +139,7 @@ async def approve_renegotiation(
 async def apply_renegotiation(
     renego_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_renegotiations")),
 ):
     """Apply an approved renegotiation: cancel old invoices and create new ones."""
     try:

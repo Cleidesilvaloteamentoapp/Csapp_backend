@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.client import Client
 from app.models.client_lot import ClientLot
 from app.models.cycle_approval import CycleApproval
@@ -41,7 +41,7 @@ router = APIRouter(prefix="/cycle-approvals", tags=["Admin Cycle Approvals"])
 @router.get("", response_model=list[CycleApprovalWithClientResponse])
 async def list_cycle_approvals(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
     status_filter: Optional[str] = Query(None, alias="status", description="PENDING, APPROVED, REJECTED"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -95,7 +95,7 @@ async def list_cycle_approvals(
 async def get_cycle_approval(
     approval_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Get a single cycle approval with details."""
     row = await db.execute(
@@ -135,7 +135,7 @@ async def approve_cycle(
     approval_id: UUID,
     payload: CycleApproveRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Approve a cycle: set new installment value and generate next 12 invoices."""
     row = await db.execute(
@@ -247,7 +247,7 @@ async def reject_cycle(
     approval_id: UUID,
     payload: CycleRejectRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Reject a cycle approval request."""
     row = await db.execute(

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.client_document import ClientDocument
 from app.models.enums import DocumentStatus
 from app.models.user import Profile
@@ -38,7 +38,7 @@ async def list_documents(
     page: int = 1,
     per_page: int = 50,
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("view_documents")),
 ):
     """List all client documents for the company (with filters)."""
     query = select(ClientDocument).where(ClientDocument.company_id == user.company_id)
@@ -61,7 +61,7 @@ async def list_documents(
 @router.get("/pending-count")
 async def pending_count(
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("view_documents")),
 ):
     """Count documents awaiting review."""
     row = await db.execute(
@@ -77,7 +77,7 @@ async def pending_count(
 async def get_document(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("view_documents")),
 ):
     """Get a specific document by ID."""
     row = await db.execute(
@@ -98,7 +98,7 @@ async def review_document(
     body: DocumentReviewRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: Profile = Depends(get_company_admin),
+    user: Profile = Depends(require_permission("manage_documents")),
 ):
     """Approve or reject a client document."""
     row = await db.execute(

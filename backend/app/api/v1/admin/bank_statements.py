@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.user import Profile
 from app.utils.logging import get_logger
 
@@ -28,7 +28,7 @@ async def upload_bank_statement(
     bank_code: str = Query("748", description="FEBRABAN bank code (default: 748 = Sicredi)"),
     file_type: str = Query("cnab240", description="File format: cnab240, cnab400, ofx"),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Upload a bank statement file for reconciliation.
 
@@ -104,7 +104,7 @@ async def upload_bank_statement(
 
 @router.get("/supported-banks")
 async def list_supported_banks(
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """List banks that have registered statement parsing support."""
     from app.services.bank.registry import list_registered_providers

@@ -19,7 +19,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin, get_super_admin
+from app.core.deps import get_company_admin, get_super_admin, require_permission
 from app.models.user import Profile
 from app.models.boleto import Boleto
 from app.models.client import Client
@@ -45,7 +45,7 @@ router = APIRouter(prefix="/boletos", tags=["Admin Boletos"])
 @router.get("", response_model=list[BoletoWithClientResponse])
 async def list_boletos(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
     client_id: Optional[UUID] = Query(None, description="Filter by client UUID"),
     status: Optional[str] = Query(None, description="Filter by status: NORMAL, LIQUIDADO, VENCIDO, CANCELADO"),
     data_vencimento_inicio: Optional[date] = Query(None, description="Filter by due date start (YYYY-MM-DD)"),
@@ -130,7 +130,7 @@ async def list_boletos(
 @router.get("/stats")
 async def get_boleto_stats(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Get boleto statistics dashboard data."""
     
@@ -182,7 +182,7 @@ async def get_boleto_stats(
 async def get_boleto_by_id(
     boleto_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Get full boleto details by database ID."""
     
@@ -204,7 +204,7 @@ async def get_boleto_by_id(
 async def get_boleto_by_nosso_numero(
     nosso_numero: str,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Get full boleto details by nossoNumero."""
     
@@ -230,7 +230,7 @@ async def get_boleto_by_nosso_numero(
 async def list_boletos_by_client(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
     status: Optional[str] = Query(None, description="Filter by status"),
 ):
     """List all boletos for a specific client."""
@@ -275,7 +275,7 @@ async def update_boleto(
     boleto_id: UUID,
     payload: BoletoUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Update boleto fields (status, payment info)."""
     
@@ -316,7 +316,7 @@ async def update_boleto(
 async def delete_boleto(
     boleto_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Soft delete boleto by setting status to CANCELADO."""
     

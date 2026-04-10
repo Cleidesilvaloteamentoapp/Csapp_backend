@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.enums import ContractEventType
 from app.models.user import Profile
 from app.schemas.contract_history import ContractHistoryCreate, ContractHistoryResponse
@@ -26,7 +26,7 @@ async def list_client_history(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_clients")),
 ):
     """List all contract history events for a client."""
     await get_client(db, admin.company_id, client_id)
@@ -53,7 +53,7 @@ async def add_history_entry(
     data: ContractHistoryCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
 ):
     """Manually add a history note or manual write-off record."""
     await get_client(db, admin.company_id, data.client_id)

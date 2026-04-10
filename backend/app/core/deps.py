@@ -90,6 +90,12 @@ async def get_current_user(
             detail="User profile not found",
         )
 
+    if not profile.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive",
+        )
+
     # Populate request.state for TenantMiddleware
     request.state.user_id = profile.id
     request.state.company_id = profile.company_id
@@ -122,3 +128,37 @@ def require_roles(*roles: UserRole):
 get_super_admin = require_roles(UserRole.SUPER_ADMIN)
 get_company_admin = require_roles(UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN)
 get_client_user = require_roles(UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.CLIENT)
+get_staff_user = require_roles(UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN, UserRole.STAFF)
+
+
+def require_permission(permission: str):
+    """Return a dependency that checks a granular permission flag for STAFF users.
+    SUPER_ADMIN and COMPANY_ADMIN always pass. STAFF must have the flag set to True."""
+
+    async def _check(
+        request: Request,
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+        db: AsyncSession = Depends(get_db),
+    ) -> Profile:
+        current_user = await get_current_user(request, credentials, db)
+        user_role = (
+            current_user.role.value
+            if hasattr(current_user.role, "value")
+            else current_user.role
+        )
+        if user_role in (UserRole.SUPER_ADMIN.value, UserRole.COMPANY_ADMIN.value):
+            return current_user
+        if user_role != UserRole.STAFF.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
+        perm = current_user.staff_permission
+        if perm is None or not getattr(perm, permission, False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: {permission}",
+            )
+        return current_user
+
+    return _check

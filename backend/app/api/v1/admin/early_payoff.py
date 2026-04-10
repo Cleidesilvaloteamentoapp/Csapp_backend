@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.early_payoff_request import EarlyPayoffRequest
 from app.models.enums import EarlyPayoffStatus
 from app.models.user import Profile
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/early-payoff-requests", tags=["Admin Early Payoff"])
 @router.get("", response_model=list[EarlyPayoffResponse])
 async def list_requests(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
     status_filter: Optional[str] = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -51,7 +51,7 @@ async def list_requests(
 async def get_request(
     request_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Get a single early payoff request."""
     row = await db.execute(
@@ -71,7 +71,7 @@ async def update_request(
     request_id: UUID,
     payload: EarlyPayoffAdminUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial")),
 ):
     """Update status of an early payoff request."""
     row = await db.execute(

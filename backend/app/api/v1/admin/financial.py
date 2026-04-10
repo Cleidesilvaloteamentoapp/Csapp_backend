@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.client import Client
 from app.models.client_lot import ClientLot
 from app.models.enums import InvoiceStatus
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/financial", tags=["Admin Financial"])
 @router.get("/summary", response_model=FinancialOverview)
 async def financial_summary(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Complete financial summary."""
     cid = admin.company_id
@@ -67,7 +67,7 @@ async def receivables(
     per_page: int = Query(20, ge=1, le=50),
     status_filter: Optional[str] = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Paginated list of invoices (accounts receivable)."""
     cid = admin.company_id
@@ -90,7 +90,7 @@ async def receivables(
 @router.get("/defaulters", response_model=list[DefaulterInfo])
 async def defaulters(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """List defaulting clients with overdue months and amounts."""
     cid = admin.company_id
@@ -133,7 +133,7 @@ async def defaulters(
 @router.get("/revenue-by-services", response_model=list[RevenueByService])
 async def revenue_by_services(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial")),
 ):
     """Revenue grouped by service type."""
     cid = admin.company_id

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin, get_super_admin
+from app.core.deps import get_company_admin, get_super_admin, require_permission
 from app.models.client import Client
 from app.models.contract_transfer import ContractTransfer
 from app.models.enums import TransferStatus
@@ -40,7 +40,7 @@ router = APIRouter(prefix="/transfers", tags=["Admin Contract Transfers"])
 @router.get("", response_model=list[ContractTransferDetailResponse])
 async def list_transfers(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
     status_filter: Optional[str] = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -90,7 +90,7 @@ async def list_transfers(
 async def create_transfer_endpoint(
     payload: ContractTransferCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
 ):
     """Create a new contract transfer request."""
     try:
@@ -126,7 +126,7 @@ async def create_transfer_endpoint(
 async def get_transfer(
     transfer_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
 ):
     """Get a single transfer with details."""
     row = await db.execute(
@@ -227,7 +227,7 @@ async def complete_transfer_endpoint(
 async def cancel_transfer_endpoint(
     transfer_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_clients")),
 ):
     """Cancel a pending or approved transfer."""
     try:

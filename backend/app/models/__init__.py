@@ -26,3 +26,4 @@ from app.models.contract_transfer import ContractTransfer  # noqa: F401
 from app.models.early_payoff_request import EarlyPayoffRequest  # noqa: F401
 from app.models.company_financial_settings import CompanyFinancialSettings  # noqa: F401
 from app.models.whatsapp_credential import WhatsAppCredential  # noqa: F401
+from app.models.staff_permission import StaffPermission  # noqa: F401

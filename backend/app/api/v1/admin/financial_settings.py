@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.company_financial_settings import CompanyFinancialSettings
 from app.models.enums import AdjustmentFrequency, AdjustmentIndex
 from app.models.user import Profile
@@ -39,7 +39,7 @@ async def _get_or_create_settings(
 @router.get("/", response_model=CompanyFinancialSettingsResponse)
 async def get_financial_settings(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial_settings")),
 ):
     """Get the company's global financial defaults.
 
@@ -54,7 +54,7 @@ async def update_financial_settings(
     data: CompanyFinancialSettingsUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial_settings")),
 ):
     """Update the company's global financial defaults.
 

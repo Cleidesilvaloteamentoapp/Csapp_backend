@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.economic_index import EconomicIndex
 from app.models.enums import AdjustmentIndex, IndexSource
 from app.models.user import Profile
@@ -30,7 +30,7 @@ router = APIRouter(prefix="/economic-indices", tags=["Admin Economic Indices"])
 @router.get("", response_model=list[EconomicIndexResponse])
 async def list_indices(
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_financial_settings")),
     index_type: Optional[str] = Query(None, description="Filter by type: IPCA, IGPM, CUB, INPC"),
     state_code: Optional[str] = Query(None, description="Filter by state code (for CUB)"),
     start_month: Optional[date] = Query(None, description="Start reference month"),
@@ -64,7 +64,7 @@ async def list_indices(
 async def create_index(
     payload: EconomicIndexCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial_settings")),
 ):
     """Manually create an economic index entry."""
     # Validate CUB requires state_code
@@ -122,7 +122,7 @@ async def update_index(
     index_id: UUID,
     payload: EconomicIndexUpdate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial_settings")),
 ):
     """Update an economic index entry."""
     result = await db.execute(
@@ -160,7 +160,7 @@ async def update_index(
 async def delete_index(
     index_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_financial_settings")),
 ):
     """Delete an economic index entry."""
     result = await db.execute(

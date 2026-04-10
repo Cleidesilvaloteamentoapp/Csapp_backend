@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, require_permission
 from app.models.enums import RescissionStatus
 from app.models.rescission import Rescission
 from app.models.user import Profile
@@ -33,7 +33,7 @@ async def list_rescissions(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_rescissions")),
 ):
     """List rescissions with optional filters."""
     stmt = select(Rescission).where(Rescission.company_id == admin.company_id)
@@ -56,7 +56,7 @@ async def list_rescissions(
 async def create_rescission(
     data: RescissionCreate,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_rescissions")),
 ):
     """Request a contract rescission (distrato)."""
     try:
@@ -76,7 +76,7 @@ async def create_rescission(
 async def get_rescission(
     rescission_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("view_rescissions")),
 ):
     """Get rescission details."""
     row = await db.execute(
@@ -96,7 +96,7 @@ async def approve_rescission(
     rescission_id: UUID,
     data: RescissionApprove,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_rescissions")),
 ):
     """Approve or reject a rescission request with financial terms."""
     try:
@@ -116,7 +116,7 @@ async def approve_rescission(
 async def complete_rescission(
     rescission_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: Profile = Depends(get_company_admin),
+    admin: Profile = Depends(require_permission("manage_rescissions")),
 ):
     """Complete an approved rescission: cancel invoices, release lot back to inventory."""
     try:
