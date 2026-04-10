@@ -153,6 +153,7 @@ def require_permission(permission: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
             )
+        
         perm = current_user.staff_permission
         if perm is None or not getattr(perm, permission, False):
             raise HTTPException(

@@ -31,7 +31,7 @@ class Profile(Base, TenantMixin, TimestampMixin):
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
     # Relationships
     company = relationship("Company", back_populates="profiles", lazy="selectin")
