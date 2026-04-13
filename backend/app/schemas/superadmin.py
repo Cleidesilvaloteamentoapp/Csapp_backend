@@ -1,6 +1,7 @@
 """Schemas for superadmin account management."""
 
 import re
+import uuid
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -32,8 +33,8 @@ class SuperadminCreateRequest(BaseModel):
 class SuperadminResponse(BaseModel):
     """Superadmin user response."""
 
-    id: str
-    company_id: str
+    id: uuid.UUID
+    company_id: uuid.UUID
     full_name: str
     email: str
     cpf_cnpj: str
