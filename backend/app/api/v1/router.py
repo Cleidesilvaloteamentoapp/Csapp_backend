@@ -27,6 +27,7 @@ from app.api.v1.admin import financial_settings as admin_financial_settings
 from app.api.v1.admin import whatsapp as admin_whatsapp
 from app.api.v1.admin import staff as admin_staff
 from app.api.v1.admin import notifications as admin_notifications
+from app.api.v1.admin import superadmins as admin_superadmins
 from app.api.v1.client import dashboard as client_dashboard
 from app.api.v1.client import documents as client_documents
 from app.api.v1.client import invoices as client_invoices
@@ -74,6 +75,7 @@ api_router.include_router(admin_financial_settings.router, prefix="/admin")
 api_router.include_router(admin_whatsapp.router, prefix="/admin")
 api_router.include_router(admin_staff.router, prefix="/admin")
 api_router.include_router(admin_notifications.router, prefix="/admin")
+api_router.include_router(admin_superadmins.router, prefix="/admin")
 
 # Client portal
 api_router.include_router(client_dashboard.router, prefix="/client")

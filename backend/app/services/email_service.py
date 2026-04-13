@@ -154,3 +154,33 @@ async def send_admin_alert(company_id: str, subject: str, message: str) -> None:
     </div>
     """
     await send_email(to=admin_emails, subject=f"[ADMIN] {subject}", html=html)
+
+
+async def send_password_reset_email(to: str, reset_token: str) -> None:
+    """Send password reset email with reset link."""
+    # In production, this should use a frontend URL with the token as query param
+    # For now, we'll include the token directly in the email
+    reset_url = f"{settings.FRONTEND_URL}/reset-password?token={reset_token}"
+
+    html = f"""
+    <h2>Recuperação de Senha</h2>
+    <p>Olá,</p>
+    <p>Recebemos uma solicitação para redefinir a senha da sua conta.</p>
+    <p>Clique no botão abaixo para criar uma nova senha:</p>
+    <div style="text-align: center; margin: 24px 0;">
+        <a href="{reset_url}" style="background: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
+            Redefinir Senha
+        </a>
+    </div>
+    <p>Ou copie e cole este link no navegador:</p>
+    <p style="word-break: break-all; background: #f8f9fa; padding: 12px; border-radius: 4px;">
+        {reset_url}
+    </p>
+    <p><strong>Este link expira em 15 minutos.</strong></p>
+    <p>Se você não solicitou esta alteração, ignore este email.</p>
+    <hr>
+    <p style="font-size: 12px; color: #6c757d;">
+        Este é um email automático. Por favor, não responda.
+    </p>
+    """
+    await send_email(to=to, subject="Recuperação de Senha", html=html)

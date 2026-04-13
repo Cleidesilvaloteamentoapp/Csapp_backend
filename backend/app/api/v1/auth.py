@@ -13,9 +13,13 @@ from app.core.deps import get_current_user
 _auth_limiter = Limiter(key_func=get_remote_address)
 from app.models.user import Profile
 from app.schemas.auth import (
+    ForgotPasswordRequest,
     LoginRequest,
     MeResponse,
+    PasswordChangeRequest,
+    PasswordResetResponse,
     RefreshRequest,
+    ResetPasswordRequest,
     SignupRequest,
     TokenResponse,
 )
@@ -68,4 +72,69 @@ async def refresh(request: Request, data: RefreshRequest, db: AsyncSession = Dep
     except (AuthenticationError, ResourceNotFoundError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.detail
+        ) from exc
+
+
+@router.post("/forgot-password", response_model=PasswordResetResponse)
+@_auth_limiter.limit("3/minute")
+async def forgot_password(request: Request, data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Request a password reset email.
+
+    Always returns success to prevent email enumeration attacks.
+    If the email exists, a reset link will be sent.
+    """
+    await auth_service.forgot_password(data.email, db)
+    return PasswordResetResponse(
+        message="If this email is registered, you will receive a password reset link"
+    )
+
+
+@router.post("/reset-password", response_model=PasswordResetResponse)
+@_auth_limiter.limit("5/minute")
+async def reset_password(request: Request, data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Reset password using token received via email."""
+    try:
+        await auth_service.reset_password(data.token, data.new_password, db)
+        return PasswordResetResponse(message="Password has been reset successfully")
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=exc.detail,
+        ) from exc
+    except ResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=exc.detail,
+        ) from exc
+
+
+@router.post("/change-password", response_model=PasswordResetResponse)
+@_auth_limiter.limit("5/minute")
+async def change_password(
+    request: Request,
+    data: PasswordChangeRequest,
+    current_user: Profile = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change password for the currently authenticated user.
+
+    Requires the current password for verification.
+    """
+    try:
+        await auth_service.change_password(
+            current_user.id,
+            data.current_password,
+            data.new_password,
+            db,
+        )
+        return PasswordResetResponse(message="Password changed successfully")
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=exc.detail,
+        ) from exc
+    except ResourceNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=exc.detail,
         ) from exc

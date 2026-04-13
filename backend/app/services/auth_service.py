@@ -141,3 +141,103 @@ async def refresh_tokens(refresh_token: str, db: AsyncSession) -> TokenResponse:
             role=profile.role.value,
         ),
     )
+
+
+async def forgot_password(email: str, db: AsyncSession) -> bool:
+    """Send password reset email to user.
+
+    Always returns True to prevent email enumeration attacks.
+    """
+    from app.services.email_service import send_password_reset_email
+
+    result = await db.execute(select(Profile).where(Profile.email == email))
+    profile = result.scalar_one_or_none()
+
+    if profile is None:
+        # Don't reveal if email exists
+        logger.info("forgot_password_email_not_found", email=email)
+        return True
+
+    if profile.hashed_password is None:
+        # User has no password (e.g., OAuth-only)
+        logger.warning("forgot_password_no_password", email=email, user_id=str(profile.id))
+        return True
+
+    # Generate short-lived reset token (15 minutes)
+    from datetime import timedelta
+
+    from app.core.security import create_access_token
+
+    reset_token = create_access_token(
+        user_id=str(profile.id),
+        company_id=str(profile.company_id) if profile.company_id else None,
+        role="password_reset",  # Special role for password reset
+        expires_delta=timedelta(minutes=15),
+    )
+
+    # Send email
+    await send_password_reset_email(email, reset_token)
+
+    logger.info("forgot_password_email_sent", email=email, user_id=str(profile.id))
+    return True
+
+
+async def reset_password(token: str, new_password: str, db: AsyncSession) -> None:
+    """Reset user password with valid reset token."""
+    from app.core.security import decode_internal_token, hash_password
+
+    try:
+        payload = decode_internal_token(token)
+    except InvalidTokenError as exc:
+        logger.warning("reset_password_invalid_token", error=str(exc))
+        raise AuthenticationError("Invalid or expired reset token") from exc
+
+    # Verify this is a password reset token
+    if payload.get("role") != "password_reset":
+        logger.warning("reset_password_wrong_token_type", role=payload.get("role"))
+        raise AuthenticationError("Invalid token type")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise AuthenticationError("Invalid token: missing user ID")
+
+    result = await db.execute(select(Profile).where(Profile.id == UUID(user_id)))
+    profile = result.scalar_one_or_none()
+
+    if profile is None:
+        raise ResourceNotFoundError("User")
+
+    # Update password
+    profile.hashed_password = hash_password(new_password)
+    db.add(profile)
+    await db.flush()
+
+    logger.info("password_reset_success", user_id=str(profile.id))
+
+
+async def change_password(
+    user_id: UUID,
+    current_password: str,
+    new_password: str,
+    db: AsyncSession,
+) -> None:
+    """Change password for logged-in user (requires current password)."""
+    result = await db.execute(select(Profile).where(Profile.id == user_id))
+    profile = result.scalar_one_or_none()
+
+    if profile is None:
+        raise ResourceNotFoundError("User")
+
+    if profile.hashed_password is None:
+        raise AuthenticationError("No password set for this account")
+
+    if not verify_password(current_password, profile.hashed_password):
+        logger.warning("change_password_wrong_current", user_id=str(user_id))
+        raise AuthenticationError("Current password is incorrect")
+
+    # Update password
+    profile.hashed_password = hash_password(new_password)
+    db.add(profile)
+    await db.flush()
+
+    logger.info("password_change_success", user_id=str(user_id))
