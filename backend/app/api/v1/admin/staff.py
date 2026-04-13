@@ -21,7 +21,7 @@ from app.utils.exceptions import AuthenticationError, ResourceNotFoundError
 router = APIRouter(prefix="/staff", tags=["Admin – Staff"])
 
 
-@router.get("/", response_model=List[StaffResponse])
+@router.get("", response_model=List[StaffResponse])
 async def list_staff(
     current_user: Profile = Depends(get_company_admin),
     db: AsyncSession = Depends(get_db),
@@ -31,7 +31,7 @@ async def list_staff(
     return [StaffResponse.from_profile(m) for m in members]
 
 
-@router.post("/", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
 async def create_staff(
     data: StaffCreateRequest,
     current_user: Profile = Depends(get_company_admin),
