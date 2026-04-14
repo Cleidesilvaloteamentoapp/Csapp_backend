@@ -18,7 +18,6 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.tenant import TenantMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from app.utils.exceptions import (
     AuthenticationError,
     InsufficientPermissionsError,
@@ -31,37 +30,6 @@ from app.utils.exceptions import (
 from app.utils.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
-
-
-# DEBUG MIDDLEWARE - Remover depois
-class DebugHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if "/admin/clients" in str(request.url):
-            logger.info(f"[DEBUG HEADERS] Path: {request.url.path}")
-            logger.info(f"[DEBUG HEADERS] Method: {request.method}")
-            logger.info(f"[DEBUG HEADERS] All headers:")
-            for key, value in request.headers.items():
-                if key.lower() == "authorization":
-                    logger.info(f"  {key}: {value[:50]}... [FOUND AUTHORIZATION]")
-                else:
-                    logger.info(f"  {key}: {value}")
-        response = await call_next(request)
-        return response
-
-
-# Middleware para normalizar trailing slashes SEM redirect (evita perder Authorization)
-class NormalizeSlashesMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # Se a URL termina com /, remove (exceto para a raiz)
-        if len(request.url.path) > 1 and request.url.path.endswith("/"):
-            # Reescrever o path no request (não é redirect)
-            new_path = request.url.path.rstrip("/")
-            scope = request.scope
-            scope["path"] = new_path
-            # Reconstruir request com novo path
-            request = Request(scope, request.receive)
-        response = await call_next(request)
-        return response
 
 
 @asynccontextmanager
@@ -94,10 +62,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Middleware (order matters – outermost first)
 # ---------------------------------------------------------------------------
 
-# DEBUG: adicionar primeiro para ver headers brutos
-app.add_middleware(DebugHeadersMiddleware)
-# Normalizar trailing slashes SEM redirect (evita perder Authorization header)
-app.add_middleware(NormalizeSlashesMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 # CORS deve vir ANTES do TenantMiddleware para processar headers corretamente
