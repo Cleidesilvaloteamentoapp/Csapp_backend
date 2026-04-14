@@ -48,7 +48,7 @@ async def list_client_history(
     return [ContractHistoryResponse.model_validate(e) for e in entries]
 
 
-@router.post("/", response_model=ContractHistoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ContractHistoryResponse, status_code=status.HTTP_201_CREATED)
 async def add_history_entry(
     data: ContractHistoryCreate,
     request: Request,

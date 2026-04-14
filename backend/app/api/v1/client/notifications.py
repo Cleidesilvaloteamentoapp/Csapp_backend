@@ -17,7 +17,7 @@ from app.schemas.notification import NotificationResponse, UnreadCountResponse
 router = APIRouter(prefix="/notifications", tags=["Client Notifications"])
 
 
-@router.get("/", response_model=list[NotificationResponse])
+@router.get("", response_model=list[NotificationResponse])
 async def list_notifications(
     is_read: Optional[bool] = None,
     notification_type: Optional[str] = None,

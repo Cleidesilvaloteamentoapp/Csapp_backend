@@ -44,7 +44,7 @@ def _enrich_response(doc: ClientDocument) -> dict:
     return resp
 
 
-@router.get("/", response_model=list[ClientDocumentResponse])
+@router.get("", response_model=list[ClientDocumentResponse])
 async def list_documents(
     document_type: Optional[str] = None,
     doc_status: Optional[str] = None,

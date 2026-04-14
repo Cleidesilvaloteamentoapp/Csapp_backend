@@ -27,7 +27,7 @@ async def _get_client(db: AsyncSession, user: Profile) -> Optional[Client]:
     return row.scalar_one_or_none()
 
 
-@router.get("/", response_model=list[InvoiceResponse])
+@router.get("", response_model=list[InvoiceResponse])
 async def list_invoices(
     lot_id: Optional[UUID] = None,
     db: AsyncSession = Depends(get_db),

@@ -47,7 +47,6 @@ dev_router = APIRouter(prefix="/developments", tags=["Admin Developments"])
 
 
 @dev_router.get("", response_model=list[DevelopmentResponse])
-@dev_router.get("/", response_model=list[DevelopmentResponse], include_in_schema=False)
 async def list_developments(
     property_type: Optional[PropertyType] = Query(None, description="Filter by property type"),
     name: Optional[str] = Query(None, description="Filter by name (partial match)"),
@@ -126,7 +125,7 @@ def _validate_development_data(data: DevelopmentCreate | DevelopmentUpdate, is_u
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
 
-@dev_router.post("/", response_model=DevelopmentResponse, status_code=status.HTTP_201_CREATED)
+@dev_router.post("", response_model=DevelopmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_development(
     data: DevelopmentCreate,
     db: AsyncSession = Depends(get_db),
@@ -189,7 +188,6 @@ async def update_development(
 
 
 @router.get("", response_model=PaginatedResponse[LotResponse])
-@router.get("/", response_model=PaginatedResponse[LotResponse], include_in_schema=False)
 async def list_lots(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
@@ -217,7 +215,7 @@ async def list_lots(
     )
 
 
-@router.post("/", response_model=LotResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=LotResponse, status_code=status.HTTP_201_CREATED)
 async def create_lot(
     data: LotCreate,
     db: AsyncSession = Depends(get_db),

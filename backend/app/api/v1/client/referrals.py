@@ -23,7 +23,7 @@ async def _get_client(db: AsyncSession, user: Profile) -> Optional[Client]:
     return row.scalar_one_or_none()
 
 
-@router.post("/", response_model=ReferralResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ReferralResponse, status_code=status.HTTP_201_CREATED)
 async def create_referral(
     data: ReferralCreate,
     db: AsyncSession = Depends(get_db),
@@ -46,7 +46,7 @@ async def create_referral(
     return ReferralResponse.model_validate(referral)
 
 
-@router.get("/", response_model=list[ReferralResponse])
+@router.get("", response_model=list[ReferralResponse])
 async def list_referrals(
     db: AsyncSession = Depends(get_db),
     user: Profile = Depends(get_client_user),

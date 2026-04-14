@@ -26,7 +26,7 @@ from app.utils.exceptions import ResourceNotFoundError
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
 
-@router.get("/", response_model=PaginatedResponse[CompanyResponse])
+@router.get("", response_model=PaginatedResponse[CompanyResponse])
 async def list_companies(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
@@ -58,7 +58,7 @@ async def list_companies(
     )
 
 
-@router.post("/", response_model=CompanyResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CompanyResponse, status_code=status.HTTP_201_CREATED)
 async def create_company(
     data: CompanyCreate,
     db: AsyncSession = Depends(get_db),

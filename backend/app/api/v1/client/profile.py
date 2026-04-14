@@ -32,7 +32,7 @@ async def _get_client(db: AsyncSession, user: Profile) -> Client:
     return client
 
 
-@router.get("/", response_model=ClientProfileResponse)
+@router.get("", response_model=ClientProfileResponse)
 async def get_profile(
     db: AsyncSession = Depends(get_db),
     user: Profile = Depends(get_client_user),
@@ -42,7 +42,7 @@ async def get_profile(
     return ClientProfileResponse.model_validate(client)
 
 
-@router.patch("/", response_model=ClientProfileResponse)
+@router.patch("", response_model=ClientProfileResponse)
 async def update_profile(
     updates: ClientProfileUpdate,
     request: Request,

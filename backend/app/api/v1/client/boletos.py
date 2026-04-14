@@ -44,7 +44,7 @@ async def _get_client_for_user(db: AsyncSession, user: Profile) -> Client:
     return client
 
 
-@router.get("/", response_model=list[BoletoListResponse])
+@router.get("", response_model=list[BoletoListResponse])
 async def list_my_boletos(
     status: Optional[str] = Query(None, pattern=r"^(NORMAL|LIQUIDADO|VENCIDO|CANCELADO|NEGATIVADO|PENDING_APPROVAL)$"),
     db: AsyncSession = Depends(get_db),

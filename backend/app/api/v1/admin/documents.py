@@ -30,7 +30,7 @@ def _enrich(doc: ClientDocument) -> dict:
     return resp
 
 
-@router.get("/", response_model=list[ClientDocumentResponse])
+@router.get("", response_model=list[ClientDocumentResponse])
 async def list_documents(
     client_id: Optional[UUID] = None,
     doc_status: Optional[str] = None,

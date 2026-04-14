@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/renegotiations", tags=["Admin Renegotiations"])
 
 
-@router.get("/", response_model=list[RenegotiationResponse])
+@router.get("", response_model=list[RenegotiationResponse])
 async def list_renegotiations(
     client_id: Optional[UUID] = Query(None),
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -72,7 +72,7 @@ async def get_debt_summary(
     }
 
 
-@router.post("/", response_model=RenegotiationResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=RenegotiationResponse, status_code=status.HTTP_201_CREATED)
 async def create_renegotiation(
     data: RenegotiationCreate,
     db: AsyncSession = Depends(get_db),

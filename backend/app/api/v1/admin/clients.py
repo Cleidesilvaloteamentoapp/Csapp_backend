@@ -25,7 +25,7 @@ from app.utils.exceptions import StorageError
 router = APIRouter(prefix="/clients", tags=["Admin Clients"])
 
 
-@router.get("/", response_model=PaginatedResponse[ClientResponse])
+@router.get("", response_model=PaginatedResponse[ClientResponse])
 async def list_clients(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=50),
@@ -41,7 +41,7 @@ async def list_clients(
     )
 
 
-@router.post("/", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
 async def create_client(
     data: ClientCreate,
     request: Request,

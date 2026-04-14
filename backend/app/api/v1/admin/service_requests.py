@@ -42,7 +42,7 @@ def _msg_to_response(msg: ServiceRequestMessage) -> dict:
     return data
 
 
-@router.get("/", response_model=ServiceRequestListResponse)
+@router.get("", response_model=ServiceRequestListResponse)
 async def list_all_requests(
     client_id: Optional[UUID] = None,
     req_status: Optional[str] = Query(None, alias="status", pattern=r"^(OPEN|IN_PROGRESS|WAITING_CLIENT|RESOLVED|CLOSED)$"),

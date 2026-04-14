@@ -36,7 +36,7 @@ async def _get_or_create_settings(
     return settings
 
 
-@router.get("/", response_model=CompanyFinancialSettingsResponse)
+@router.get("", response_model=CompanyFinancialSettingsResponse)
 async def get_financial_settings(
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_financial_settings")),
@@ -49,7 +49,7 @@ async def get_financial_settings(
     return CompanyFinancialSettingsResponse.model_validate(settings)
 
 
-@router.put("/", response_model=CompanyFinancialSettingsResponse)
+@router.put("", response_model=CompanyFinancialSettingsResponse)
 async def update_financial_settings(
     data: CompanyFinancialSettingsUpdate,
     request: Request,

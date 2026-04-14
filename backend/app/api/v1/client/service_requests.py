@@ -67,7 +67,7 @@ def _msg_to_response(msg: ServiceRequestMessage) -> dict:
     return data
 
 
-@router.post("/", response_model=ServiceRequestResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ServiceRequestResponse, status_code=status.HTTP_201_CREATED)
 async def create_service_request(
     body: ServiceRequestCreate,
     db: AsyncSession = Depends(get_db),
@@ -105,7 +105,7 @@ async def create_service_request(
     return _to_response(sr)
 
 
-@router.get("/", response_model=ServiceRequestListResponse)
+@router.get("", response_model=ServiceRequestListResponse)
 async def list_service_requests(
     req_status: Optional[str] = Query(None, alias="status", pattern=r"^(OPEN|IN_PROGRESS|WAITING_CLIENT|RESOLVED|CLOSED)$"),
     service_type: Optional[str] = Query(None, pattern=r"^(MANUTENCAO|SUPORTE|FINANCEIRO|DOCUMENTACAO|OUTROS)$"),

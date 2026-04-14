@@ -18,7 +18,7 @@ router = APIRouter(prefix="/notifications", tags=["Admin Notifications"])
 
 
 @router.get("", response_model=list[NotificationResponse])
-@router.get("/", response_model=list[NotificationResponse], include_in_schema=False)
+@router.get("", response_model=list[NotificationResponse], include_in_schema=False)
 async def list_notifications(
     is_read: Optional[bool] = None,
     notification_type: Optional[str] = None,

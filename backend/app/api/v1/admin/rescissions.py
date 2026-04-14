@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/rescissions", tags=["Admin Rescissions"])
 
 
-@router.get("/", response_model=list[RescissionResponse])
+@router.get("", response_model=list[RescissionResponse])
 async def list_rescissions(
     client_id: Optional[UUID] = Query(None),
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -52,7 +52,7 @@ async def list_rescissions(
     return [RescissionResponse.model_validate(r) for r in result.scalars().all()]
 
 
-@router.post("/", response_model=RescissionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=RescissionResponse, status_code=status.HTTP_201_CREATED)
 async def create_rescission(
     data: RescissionCreate,
     db: AsyncSession = Depends(get_db),
