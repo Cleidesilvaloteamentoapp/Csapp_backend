@@ -6,9 +6,10 @@ from decimal import Decimal
 from typing import Any, Optional, Dict
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import PropertyType
+from app.schemas.financial_settings import rate_from_percent, rate_to_percent
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +159,10 @@ class LotResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class LotAssignRequest(BaseModel):
-    """Assign a lot to a client and optionally generate invoices."""
+    """Assign a lot to a client and optionally generate invoices.
+
+    All rate fields accept percentages: send 2 for 2%, 0.5 for 0.5%.
+    """
 
     client_id: UUID
     lot_id: UUID
@@ -166,20 +170,33 @@ class LotAssignRequest(BaseModel):
     total_value: Decimal = Field(..., gt=0)
     down_payment: Optional[Decimal] = Field(None, ge=0)
     total_installments: int = Field(1, ge=1, le=360)
-    annual_adjustment_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Fixed annual rate on top of IPCA, default 0.05 (5%)")
-    penalty_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Custom penalty rate for this client-lot, e.g. 0.02 = 2%")
-    daily_interest_rate: Optional[Decimal] = Field(None, ge=0, le=0.01, description="Custom daily interest rate, e.g. 0.00033")
+    annual_adjustment_rate: Optional[Decimal] = Field(None, description="Fixed annual rate on top of IPCA in %, e.g. 5 = 5%")
+    penalty_rate: Optional[Decimal] = Field(None, description="Custom penalty rate in %, e.g. 2 = 2%")
+    daily_interest_rate: Optional[Decimal] = Field(None, description="Custom daily interest rate in %, e.g. 0.033 = 0.033%/day")
     adjustment_index: Optional[str] = Field(None, pattern=r"^(IPCA|IGPM|CUB|INPC)$", description="Price index: IPCA, IGPM, CUB, INPC")
     adjustment_frequency: Optional[str] = Field(None, pattern=r"^(MONTHLY|QUARTERLY|SEMIANNUAL|ANNUAL)$", description="Adjustment frequency")
-    adjustment_custom_rate: Optional[Decimal] = Field(None, ge=0, le=1, description="Custom fixed rate on top of index, e.g. 0.05 = 5%")
+    adjustment_custom_rate: Optional[Decimal] = Field(None, description="Custom fixed rate on top of index in %, e.g. 5 = 5%")
     payment_plan: Optional[Dict[str, Any]] = Field(
         None,
         description="Installment details, e.g. {'installments': 120, 'first_due': '2024-03-01'}",
     )
 
+    @field_validator("penalty_rate", "adjustment_custom_rate", "annual_adjustment_rate", mode="before")
+    @classmethod
+    def percent_to_decimal(cls, v):
+        return rate_from_percent(v, max_percent=100)
+
+    @field_validator("daily_interest_rate", mode="before")
+    @classmethod
+    def daily_percent_to_decimal(cls, v):
+        return rate_from_percent(v, max_percent=1)
+
 
 class ClientLotResponse(BaseModel):
-    """ClientLot read response."""
+    """ClientLot read response.
+
+    All rate fields are returned as percentages (e.g. 2 = 2%).
+    """
 
     id: UUID
     company_id: UUID
@@ -207,3 +224,12 @@ class ClientLotResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator(
+        "penalty_rate", "daily_interest_rate",
+        "adjustment_custom_rate", "annual_adjustment_rate",
+        mode="before",
+    )
+    @classmethod
+    def db_to_percent(cls, v):
+        return rate_to_percent(v)

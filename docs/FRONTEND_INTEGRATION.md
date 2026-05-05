@@ -16,6 +16,7 @@
 8. [Roles e Permissões](#8-roles-e-permissões)
 9. [Exemplos Práticos](#9-exemplos-práticos)
 10. [Checklist de Integração](#10-checklist-de-integração)
+11. [Campos Financeiros (Juros, Multa, Taxas)](#11-campos-financeiros-juros-multa-taxas)
 
 ---
 
@@ -430,6 +431,13 @@ file: (arquivo binário)
   "lot_id": "00000000-0000-4000-c000-00000000cc04",
   "purchase_date": "2025-11-01",
   "total_value": 105000.00,
+  "down_payment": 10000.00,
+  "total_installments": 24,
+  "penalty_rate": 2,
+  "daily_interest_rate": 0.033,
+  "adjustment_custom_rate": 5,
+  "adjustment_index": "IPCA",
+  "adjustment_frequency": "ANNUAL",
   "payment_plan": {
     "installments": 24,
     "first_due": "2025-12-01"
@@ -735,16 +743,25 @@ interface LotResponse {
 }
 
 // ===================== Lot Assignment =====================
+// ⚠️ TODOS os campos de taxa (rates) usam PERCENTUAL:
+//    2 = 2%, 0.5 = 0.5%, 0.033 = 0.033%
+//    O backend converte automaticamente para decimal no banco.
 interface LotAssignRequest {
   client_id: string;
   lot_id: string;
   purchase_date: string;       // "YYYY-MM-DD"
   total_value: number;
+  down_payment?: number;
+  total_installments?: number; // 1-360
+  annual_adjustment_rate?: number;  // % (ex: 5 = 5%)
+  penalty_rate?: number;            // % (ex: 2 = 2%)
+  daily_interest_rate?: number;     // % (ex: 0.033 = 0.033%/dia)
+  adjustment_index?: "IPCA" | "IGPM" | "CUB" | "INPC";
+  adjustment_frequency?: "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "ANNUAL";
+  adjustment_custom_rate?: number;  // % (ex: 5 = 5%)
   payment_plan?: {
     installments?: number;
     first_due?: string;        // "YYYY-MM-DD"
-    down_payment?: number;
-    monthly_value?: number;
   };
 }
 
@@ -755,6 +772,16 @@ interface ClientLotResponse {
   lot_id: string;
   purchase_date: string;
   total_value: string;         // Decimal como string
+  down_payment: string | null;
+  total_installments: number;
+  current_cycle: number;
+  current_installment_value: string | null;
+  annual_adjustment_rate: number | null;  // % (ex: 5 = 5%)
+  penalty_rate: number | null;            // % (ex: 2 = 2%)
+  daily_interest_rate: number | null;     // % (ex: 0.033 = 0.033%)
+  adjustment_index: string | null;
+  adjustment_frequency: string | null;
+  adjustment_custom_rate: number | null;  // % (ex: 5 = 5%)
   payment_plan: Record<string, any> | null;
   status: "active" | "completed" | "cancelled";
   created_at: string;
@@ -1193,3 +1220,122 @@ Para facilitar testes durante o desenvolvimento:
 | **Dev: Jardim dos Ipês** | `00000000-0000-4000-b000-00000000bb02` |
 | **Dev: Vila Verde** | `00000000-0000-4000-b000-00000000bb03` |
 | **Lote disponível (ex)** | `00000000-0000-4000-c000-00000000cc04` |
+
+---
+
+## 11. Campos Financeiros (Juros, Multa, Taxas)
+
+### ⚠️ REGRA IMPORTANTE: Todos os campos de taxa usam PERCENTUAL
+
+O backend aceita e retorna valores como **percentual direto**. NÃO envie como decimal.
+
+### Tabela de conversão
+
+| O que você quer | O que enviar | ❌ NÃO envie |
+|-----------------|-------------|---------------|
+| Multa de 2% | `"penalty_rate": 2` | ~~`0.02`~~ |
+| Multa de 0.5% | `"penalty_rate": 0.5` | ~~`0.005`~~ |
+| Juros de 0.033%/dia | `"daily_interest_rate": 0.033` | ~~`0.00033`~~ |
+| Juros de 1%/dia | `"daily_interest_rate": 1` | ~~`0.01`~~ |
+| Taxa anual de 5% | `"adjustment_custom_rate": 5` | ~~`0.05`~~ |
+| Taxa anual de 10% | `"adjustment_custom_rate": 10` | ~~`0.10`~~ |
+
+### Campos afetados
+
+| Campo | Tipo | Range | Descrição |
+|-------|------|-------|-----------|
+| `penalty_rate` | number | 0–100 | Multa por atraso em % |
+| `daily_interest_rate` | number | 0–1 | Juros diário em % (máx 1%/dia) |
+| `adjustment_custom_rate` | number | 0–100 | Taxa fixa anual em % |
+| `annual_adjustment_rate` | number | 0–100 | Taxa anual sobre IPCA em % |
+
+### Endpoints que usam esses campos
+
+| Endpoint | Método | Campos |
+|----------|--------|--------|
+| `POST /admin/lots/assign` | Envio (input) | Todos acima |
+| `PATCH /admin/lots/client-lots/{id}/financial-rules` | Envio (input) | Todos acima |
+| `PUT /admin/financial-settings/` | Envio (input) | penalty_rate, daily_interest_rate, adjustment_custom_rate |
+| `GET /admin/financial-settings/` | Resposta (output) | penalty_rate, daily_interest_rate, adjustment_custom_rate |
+| `GET /admin/lots/client-lots/{id}` | Resposta (output) | Todos acima |
+
+### Exemplo completo: Configurar regras financeiras da empresa
+
+```typescript
+// Configurar defaults da empresa
+await api.put('/admin/financial-settings/', {
+  penalty_rate: 2,              // 2% de multa
+  daily_interest_rate: 0.033,   // 0.033% ao dia (~1% ao mês)
+  adjustment_custom_rate: 5,    // 5% taxa fixa anual
+  adjustment_index: 'IPCA',
+  adjustment_frequency: 'ANNUAL',
+});
+
+// Resposta retorna no mesmo formato:
+// { penalty_rate: 2, daily_interest_rate: 0.033, adjustment_custom_rate: 5, ... }
+```
+
+### Exemplo: Override por lote do cliente
+
+```typescript
+// Definir taxa personalizada para um lote específico
+await api.patch(`/admin/lots/client-lots/${clientLotId}/financial-rules`, {
+  penalty_rate: 3,              // 3% de multa (override)
+  daily_interest_rate: 0.05,    // 0.05% ao dia (override)
+});
+
+// Enviar null para limpar override (volta ao default da empresa)
+await api.patch(`/admin/lots/client-lots/${clientLotId}/financial-rules`, {
+  penalty_rate: null,           // Volta ao default da empresa
+});
+```
+
+### Exemplo: Vender lote com taxas customizadas
+
+```typescript
+await api.post('/admin/lots/assign', {
+  client_id: 'uuid-do-cliente',
+  lot_id: 'uuid-do-lote',
+  purchase_date: '2025-11-01',
+  total_value: 105000.00,
+  down_payment: 10000.00,
+  total_installments: 120,
+  penalty_rate: 2,              // 2%
+  daily_interest_rate: 0.033,   // 0.033%/dia
+  adjustment_custom_rate: 5,    // 5%/ano
+  adjustment_index: 'IPCA',
+  adjustment_frequency: 'ANNUAL',
+  payment_plan: {
+    installments: 120,
+    first_due: '2025-12-01',
+  },
+});
+```
+
+### TypeScript: Interfaces atualizadas
+
+```typescript
+interface FinancialSettingsUpdate {
+  penalty_rate?: number;           // % (0-100)
+  daily_interest_rate?: number;    // % (0-1)
+  adjustment_index?: 'IPCA' | 'IGPM' | 'CUB' | 'INPC';
+  adjustment_frequency?: 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL';
+  adjustment_custom_rate?: number; // % (0-100)
+}
+
+interface FinancialSettingsResponse extends FinancialSettingsUpdate {
+  id: string;
+  company_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ClientLotFinancialUpdate {
+  penalty_rate?: number | null;           // % ou null para limpar
+  daily_interest_rate?: number | null;    // % ou null para limpar
+  adjustment_index?: string | null;
+  adjustment_frequency?: string | null;
+  adjustment_custom_rate?: number | null; // % ou null para limpar
+  annual_adjustment_rate?: number | null; // % ou null para limpar
+}
+```

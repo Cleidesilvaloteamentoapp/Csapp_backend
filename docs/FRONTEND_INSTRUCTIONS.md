@@ -1,7 +1,12 @@
 # Frontend Instructions — Client Adjustments & Financial Management Enhancement
 
 > **Backend version**: migration `007_company_financial_settings`
-> **Date**: March 2026 (updated 2026-03-24)
+> **Date**: March 2026 (updated 2026-05-05)
+>
+> ⚠️ **IMPORTANTE**: Todos os campos de taxa (rates) agora usam **PERCENTUAL DIRETO**:
+> - Enviar `2` para 2% (antigamente enviava `0.02`)
+> - Enviar `0.033` para 0.033% ao dia (antigamente enviava `0.00033`)
+> - O backend converte automaticamente para decimal no banco de dados.
 
 This document describes all new backend endpoints, schemas, and behavioral changes that the frontend team needs to implement.
 
@@ -380,28 +385,32 @@ This is the **core financial customization feature**. It allows the admin to:
 **Request body** (`PUT`):
 ```json
 {
-  "penalty_rate": 0.02,
-  "daily_interest_rate": 0.00033,
+  "penalty_rate": 2,
+  "daily_interest_rate": 0.033,
   "adjustment_index": "IPCA",
   "adjustment_frequency": "ANNUAL",
-  "adjustment_custom_rate": 0.05
+  "adjustment_custom_rate": 5
 }
 ```
+
+> **Nota**: Os valores são enviados como percentual. `2` = 2%, `0.033` = 0.033%/dia.
 
 **Response** (`GET` and `PUT`):
 ```typescript
 interface CompanyFinancialSettingsResponse {
   id: string;
   company_id: string;
-  penalty_rate: number;          // e.g. 0.02 = 2%
-  daily_interest_rate: number;   // e.g. 0.00033 = 0.033%/day
+  penalty_rate: number;          // % (e.g. 2 = 2%)
+  daily_interest_rate: number;   // % (e.g. 0.033 = 0.033%/day)
   adjustment_index: 'IPCA' | 'IGPM' | 'CUB' | 'INPC';
   adjustment_frequency: 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL';
-  adjustment_custom_rate: number; // e.g. 0.05 = 5% fixed rate on top of index
+  adjustment_custom_rate: number; // % (e.g. 5 = 5% fixed rate on top of index)
   created_at: string;
   updated_at: string;
 }
 ```
+
+> A resposta retorna os valores no mesmo formato percentual que foram enviados.
 
 **UI needed**: Admin page "Configurações Financeiras" (or a tab inside Settings):
 - Form with 5 fields: multa (%), juros diários (%), índice de reajuste (dropdown), frequência (dropdown), taxa fixa (%)
@@ -419,14 +428,16 @@ interface CompanyFinancialSettingsResponse {
 **Request body** (`PATCH`):
 ```json
 {
-  "penalty_rate": 0.03,
-  "daily_interest_rate": 0.0005,
+  "penalty_rate": 3,
+  "daily_interest_rate": 0.05,
   "adjustment_index": "IGPM",
   "adjustment_frequency": "SEMIANNUAL",
-  "adjustment_custom_rate": 0.08,
-  "annual_adjustment_rate": 0.05
+  "adjustment_custom_rate": 8,
+  "annual_adjustment_rate": 5
 }
 ```
+
+> **Nota**: Todos os campos de taxa usam percentual. `3` = 3%, `0.05` = 0.05%/dia.
 All fields are **optional**. Only send what you want to change. Send `null` to clear an override (falls back to company default).
 
 **Response**: Full `ClientLotResponse` (see 9.3).
@@ -457,11 +468,12 @@ interface ClientLotResponse {
   last_adjustment_date: string | null;
   last_cycle_paid_at: string | null;
   // --- NEW FINANCIAL FIELDS ---
-  penalty_rate: number | null;          // null = using company default
-  daily_interest_rate: number | null;   // null = using company default
+  // All rate fields are in PERCENT (e.g. 2 = 2%, 0.033 = 0.033%/day)
+  penalty_rate: number | null;          // %, null = using company default
+  daily_interest_rate: number | null;   // %, null = using company default
   adjustment_index: 'IPCA' | 'IGPM' | 'CUB' | 'INPC' | null; // null = using company default
   adjustment_frequency: 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL' | null;
-  adjustment_custom_rate: number | null; // null = using company default
+  adjustment_custom_rate: number | null; // %, null = using company default
   previous_client_id: string | null;    // filled after contract transfer
   transfer_date: string | null;
   // ---
@@ -489,15 +501,17 @@ interface ClientLotResponse {
   "total_value": 150000.00,
   "down_payment": 15000.00,
   "total_installments": 228,
-  "annual_adjustment_rate": 0.05,
-  "penalty_rate": 0.03,
-  "daily_interest_rate": 0.0005,
+  "annual_adjustment_rate": 5,
+  "penalty_rate": 3,
+  "daily_interest_rate": 0.05,
   "adjustment_index": "IGPM",
   "adjustment_frequency": "ANNUAL",
-  "adjustment_custom_rate": 0.06,
+  "adjustment_custom_rate": 6,
   "payment_plan": { "first_due": "2026-02-15" }
 }
 ```
+
+> **Nota**: Todos os campos de taxa usam percentual. `5` = 5%, `0.05` = 0.05%/dia.
 
 If financial fields are **omitted**, the backend automatically loads the company's global defaults. If no company defaults exist, hardcoded system constants are used.
 
@@ -528,13 +542,15 @@ If financial fields are **omitted**, the backend automatically loads the company
 
 ### 9.6 Hardcoded System Constants (Last Resort)
 
-| Field | Hardcoded Value | Description |
-|-------|----------------|-------------|
-| `penalty_rate` | `0.02` | 2% flat penalty |
-| `daily_interest_rate` | `0.00033` | ~1% per month (0.033%/day) |
-| `adjustment_index` | `IPCA` | Brazilian consumer price index |
-| `adjustment_frequency` | `ANNUAL` | Once per year |
-| `adjustment_custom_rate` | `0.05` | 5% fixed rate on top of index |
+| Field | Hardcoded Value (Decimal) | API Format (Percent) | Description |
+|-------|--------------------------|---------------------|-------------|
+| `penalty_rate` | `0.02` | `2` | 2% flat penalty |
+| `daily_interest_rate` | `0.00033` | `0.033` | ~1% per month (0.033%/day) |
+| `adjustment_index` | `IPCA` | `IPCA` | Brazilian consumer price index |
+| `adjustment_frequency` | `ANNUAL` | `ANNUAL` | Once per year |
+| `adjustment_custom_rate` | `0.05` | `5` | 5% fixed rate on top of index |
+
+> **Nota**: O backend armazena como decimal no banco, mas a API aceita e retorna como percentual para facilitar o frontend.
 
 ### 9.7 Complete Frontend Flow
 
