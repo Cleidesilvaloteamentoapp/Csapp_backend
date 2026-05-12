@@ -85,14 +85,22 @@ async def signup(data: SignupRequest, db: AsyncSession) -> TokenResponse:
 
 async def login(data: LoginRequest, db: AsyncSession) -> TokenResponse:
     """Authenticate a user with email + password."""
-    result = await db.execute(select(Profile).where(Profile.email == data.email))
-    profile = result.scalar_one_or_none()
+    result = await db.execute(
+        select(Profile).where(Profile.email == data.email, Profile.is_active == True)
+    )
+    profiles = result.scalars().all()
 
-    if profile is None or profile.hashed_password is None:
+    if not profiles:
         logger.warning("login_failed", email=data.email, reason="not_found")
         raise AuthenticationError("Invalid email or password")
 
-    if not verify_password(data.password, profile.hashed_password):
+    profile = None
+    for p in profiles:
+        if p.hashed_password and verify_password(data.password, p.hashed_password):
+            profile = p
+            break
+
+    if profile is None:
         logger.warning("login_failed", email=data.email, reason="bad_password")
         raise AuthenticationError("Invalid email or password")
 
@@ -150,17 +158,14 @@ async def forgot_password(email: str, db: AsyncSession) -> bool:
     """
     from app.services.email_service import send_password_reset_email
 
-    result = await db.execute(select(Profile).where(Profile.email == email))
-    profile = result.scalar_one_or_none()
+    result = await db.execute(
+        select(Profile).where(Profile.email == email, Profile.is_active == True)
+    )
+    profiles = result.scalars().all()
 
-    if profile is None:
+    if not profiles:
         # Don't reveal if email exists
         logger.info("forgot_password_email_not_found", email=email)
-        return True
-
-    if profile.hashed_password is None:
-        # User has no password (e.g., OAuth-only)
-        logger.warning("forgot_password_no_password", email=email, user_id=str(profile.id))
         return True
 
     # Generate short-lived reset token (15 minutes)
@@ -168,17 +173,22 @@ async def forgot_password(email: str, db: AsyncSession) -> bool:
 
     from app.core.security import create_access_token
 
-    reset_token = create_access_token(
-        user_id=str(profile.id),
-        company_id=str(profile.company_id) if profile.company_id else None,
-        role="password_reset",  # Special role for password reset
-        expires_delta=timedelta(minutes=15),
-    )
+    # Send reset email to every active profile with a password set
+    for profile in profiles:
+        if profile.hashed_password is None:
+            logger.warning("forgot_password_no_password", email=email, user_id=str(profile.id))
+            continue
 
-    # Send email
-    await send_password_reset_email(email, reset_token)
+        reset_token = create_access_token(
+            user_id=str(profile.id),
+            company_id=str(profile.company_id) if profile.company_id else None,
+            role="password_reset",  # Special role for password reset
+            expires_delta=timedelta(minutes=15),
+        )
 
-    logger.info("forgot_password_email_sent", email=email, user_id=str(profile.id))
+        await send_password_reset_email(email, reset_token)
+        logger.info("forgot_password_email_sent", email=email, user_id=str(profile.id))
+
     return True
 
 
