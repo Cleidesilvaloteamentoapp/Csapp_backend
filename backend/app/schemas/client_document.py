@@ -7,6 +7,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+DOCUMENT_TYPE_PATTERN = (
+    r"^(RG|CPF|COMPROVANTE_RESIDENCIA|CNH|CONTRATO|CERTIDAO_ESTADO_CIVIL|"
+    r"COMPROVANTE_RENDA|MATRICULA|GUIA_INFORMACAO|IPTU|FOTOS_IMOVEL|OUTROS)$"
+)
+
 
 class ClientDocumentResponse(BaseModel):
     """Client document read response."""
@@ -20,6 +25,7 @@ class ClientDocumentResponse(BaseModel):
     file_url: Optional[str] = None
     file_size: int
     description: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
     status: str
     rejection_reason: Optional[str] = None
     reviewed_at: Optional[datetime] = None
@@ -33,10 +39,17 @@ class ClientDocumentResponse(BaseModel):
 class ClientDocumentUpload(BaseModel):
     """Metadata sent alongside a file upload."""
 
-    document_type: str = Field(
-        ..., pattern=r"^(RG|CPF|COMPROVANTE_RESIDENCIA|CNH|CONTRATO|OUTROS)$"
-    )
+    document_type: str = Field(..., pattern=DOCUMENT_TYPE_PATTERN)
     description: Optional[str] = Field(None, max_length=500)
+    tags: Optional[list[str]] = Field(default=None, max_length=20)
+
+
+class ClientDocumentUpdate(BaseModel):
+    """Admin partial update — change category and/or tags."""
+
+    document_type: Optional[str] = Field(default=None, pattern=DOCUMENT_TYPE_PATTERN)
+    description: Optional[str] = Field(default=None, max_length=500)
+    tags: Optional[list[str]] = Field(default=None, max_length=20)
 
 
 class DocumentReviewRequest(BaseModel):

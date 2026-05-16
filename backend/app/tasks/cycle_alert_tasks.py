@@ -1,11 +1,9 @@
 """Celery tasks for cycle renewal alerts and batch generation."""
 
-import asyncio
 from datetime import date, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.client import Client
 from app.models.client_lot import ClientLot
@@ -14,18 +12,16 @@ from app.models.invoice import Invoice
 from app.models.user import Profile
 from app.services.client_lot_service import get_remaining_installments, should_generate_next_batch
 from app.services.notification_service import create_notification
+from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _run_async(coro):
-    """Helper to run an async coroutine from a sync Celery task."""
-    return asyncio.run(coro)
-
-
-async def _check_cycle_alerts_async(days_before: int = 30):
+async def _check_cycle_alerts_async(
+    session_factory: TaskSessionFactory, days_before: int = 30
+):
     """Check for client lots that need new batch generation.
 
     This task runs periodically to identify clients whose current 12-installment
@@ -34,9 +30,7 @@ async def _check_cycle_alerts_async(days_before: int = 30):
     Args:
         days_before: Days before next due date to trigger alert
     """
-    from app.core.database import async_session_factory
-
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         # Get all active client lots
         stmt = select(ClientLot).where(ClientLot.status == ClientLotStatus.ACTIVE)
         result = await db.execute(stmt)
@@ -137,13 +131,16 @@ def check_cycle_alerts(self, days_before: int = 30):
         days_before: Days before next due date to trigger alert
     """
     try:
-        _run_async(_check_cycle_alerts_async(days_before))
+        run_in_task_loop(
+            lambda sf: _check_cycle_alerts_async(sf, days_before)
+        )
     except Exception as exc:
         logger.error("check_cycle_alerts_failed", error=str(exc))
         self.retry(exc=exc)
 
 
 async def _generate_next_batch_for_client_async(
+    session_factory: TaskSessionFactory,
     client_lot_id: str,
     adjustment_rate: float,
     admin_id: str,
@@ -155,10 +152,9 @@ async def _generate_next_batch_for_client_async(
         adjustment_rate: Adjustment rate as decimal (e.g., 0.05 for 5%)
         admin_id: Admin profile UUID who triggered the generation
     """
-    from app.core.database import async_session_factory
     from decimal import Decimal
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         cl_id = UUID(client_lot_id)
 
         # Get client lot
@@ -240,9 +236,9 @@ def generate_next_batch_for_client(
         admin_id: Admin profile UUID who triggered
     """
     try:
-        _run_async(
-            _generate_next_batch_for_client_async(
-                client_lot_id, adjustment_rate, admin_id
+        run_in_task_loop(
+            lambda sf: _generate_next_batch_for_client_async(
+                sf, client_lot_id, adjustment_rate, admin_id
             )
         )
     except Exception as exc:

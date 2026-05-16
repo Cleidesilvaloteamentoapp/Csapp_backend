@@ -303,12 +303,20 @@ async def assign_lot(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Calculate installment value considering down payment
+    # Calculate installment value considering down payment.
+    # If the request includes an explicit monthly_value, that overrides the
+    # automatic division (allows fixed installment regardless of math rounding).
     plan = data.payment_plan or {}
     num_installments = data.total_installments or int(plan.get("installments", 1))
     down_payment = data.down_payment or Decimal("0")
     financed_value = data.total_value - down_payment
-    installment_value = financed_value / num_installments if num_installments > 0 else financed_value
+    plan_monthly = plan.get("monthly_value")
+    if plan_monthly is not None and Decimal(str(plan_monthly)) > 0:
+        installment_value = Decimal(str(plan_monthly))
+    else:
+        installment_value = (
+            financed_value / num_installments if num_installments > 0 else financed_value
+        )
 
     # Load company financial defaults for fields not provided in the request
     from app.models.company_financial_settings import CompanyFinancialSettings
@@ -503,11 +511,14 @@ async def generate_next_batch(
     if not info:
         raise HTTPException(status_code=404, detail="Could not calculate installment info")
 
-    # Calculate new value with adjustment
+    # Calculate new value with adjustment.
+    # The fallback must subtract down_payment so the parcel reflects the
+    # financed amount, not the total contract value.
     current_value = cl.current_installment_value
     if not current_value:
         total_installments = cl.total_installments or 1
-        current_value = cl.total_value / total_installments
+        financed = cl.total_value - (cl.down_payment or Decimal("0"))
+        current_value = financed / total_installments
 
     new_value = current_value * Decimal(str(1 + adjustment_rate))
     new_value = new_value.quantize(Decimal("0.01"))

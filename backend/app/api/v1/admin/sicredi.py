@@ -314,6 +314,20 @@ async def batch_criar_boletos(
     if not result_db.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Client not found")
 
+    # Verify Sicredi credentials are configured for this company.
+    # Without this, the batch would be enqueued, fail silently in the worker,
+    # and leave the user thinking boletos are "stuck saving to DB only".
+    from app.services.sicredi_service import get_credential
+    cred = await get_credential(db, admin.company_id)
+    if not cred:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Credenciais Sicredi não cadastradas para esta empresa. "
+                "Cadastre via POST /admin/sicredi/credentials antes de gerar boletos."
+            ),
+        )
+
     # Calculate number of installments
     freq_months = {"MENSAL": 1, "TRIMESTRAL": 3, "SEMESTRAL": 6, "ANUAL": 12}
     interval = freq_months.get(payload.frequency, 1)

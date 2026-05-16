@@ -1,30 +1,24 @@
 
 """Celery tasks for invoice management."""
 
-import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
+from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _run_async(coro):
-    """Helper to run an async coroutine from a sync Celery task."""
-    return asyncio.run(coro)
-
-
-async def _check_overdue_invoices_async():
+async def _check_overdue_invoices_async(session_factory: TaskSessionFactory):
     """Find pending invoices past due date, mark as overdue, flag defaulters."""
     from sqlalchemy import select, update
-    from app.core.database import async_session_factory
     from app.models.client import Client
     from app.models.client_lot import ClientLot
     from app.models.enums import ClientStatus, InvoiceStatus
     from app.models.invoice import Invoice
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         today = date.today()
 
         # Mark pending invoices past due date as overdue
@@ -67,25 +61,24 @@ async def _check_overdue_invoices_async():
 def check_overdue_invoices(self):
     """Daily task: mark overdue invoices and flag defaulters."""
     try:
-        _run_async(_check_overdue_invoices_async())
+        run_in_task_loop(_check_overdue_invoices_async)
     except Exception as exc:
         logger.error("check_overdue_failed", error=str(exc))
         self.retry(exc=exc)
 
 
-async def _generate_monthly_invoices_async():
+async def _generate_monthly_invoices_async(session_factory: TaskSessionFactory):
     """Generate next month's invoices for active client_lots.
 
     CYCLE LOCK RULE: New invoices for a new 12-month cycle are only
     generated after the previous cycle is fully paid.
     """
-    from sqlalchemy import select, func
-    from app.core.database import async_session_factory
+    from sqlalchemy import select
     from app.models.client_lot import ClientLot
     from app.models.enums import ClientLotStatus, InvoiceStatus
     from app.models.invoice import Invoice
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         rows = await db.execute(
             select(ClientLot).where(ClientLot.status == ClientLotStatus.ACTIVE)
         )
@@ -164,7 +157,7 @@ async def _generate_monthly_invoices_async():
 def generate_monthly_invoices(self):
     """Monthly task: generate upcoming invoices for active lots."""
     try:
-        _run_async(_generate_monthly_invoices_async())
+        run_in_task_loop(_generate_monthly_invoices_async)
     except Exception as exc:
         logger.error("generate_monthly_failed", error=str(exc))
         self.retry(exc=exc)

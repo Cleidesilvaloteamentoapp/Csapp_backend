@@ -1,12 +1,12 @@
 """Celery tasks for batch boleto creation and bulk operations."""
 
 import asyncio
-import time
 from datetime import date
 from uuid import UUID
 
 from dateutil.relativedelta import relativedelta
 
+from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
 
@@ -37,19 +37,15 @@ STATUS_UPDATE_MAP = {
 }
 
 
-def _run_async(coro):
-    """Helper to run an async coroutine from a sync Celery task."""
-    return asyncio.run(coro)
-
-
 # ---------------------------------------------------------------------------
 # Batch Creation
 # ---------------------------------------------------------------------------
 
-async def _process_batch_creation_async(batch_id: str, company_id: str):
+async def _process_batch_creation_async(
+    session_factory: TaskSessionFactory, batch_id: str, company_id: str
+):
     """Create multiple boletos sequentially via Sicredi API."""
     from sqlalchemy import select
-    from app.core.database import async_session_factory
     from app.models.batch_operation import BatchOperation
     from app.models.boleto import Boleto
     from app.models.client import Client
@@ -62,7 +58,7 @@ async def _process_batch_creation_async(batch_id: str, company_id: str):
         Pagador,
     )
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         # Load batch operation
         stmt = select(BatchOperation).where(BatchOperation.id == UUID(batch_id))
         result = await db.execute(stmt)
@@ -256,11 +252,20 @@ async def _process_batch_creation_async(batch_id: str, company_id: str):
         # Final status
         if batch.failed_items == batch.total_items:
             batch.status = "FAILED"
-            batch.error_summary = "All items failed"
+            first_error = next(
+                (r.get("detail") for r in results if r.get("status") == "FAILED"),
+                "Unknown error",
+            )
+            batch.error_summary = (
+                f"Todas as {batch.total_items} parcelas falharam ao registrar no Sicredi. "
+                f"Primeiro erro: {first_error}"
+            )
         else:
             batch.status = "COMPLETED"
             if batch.failed_items > 0:
-                batch.error_summary = f"{batch.failed_items} of {batch.total_items} items failed"
+                batch.error_summary = (
+                    f"{batch.failed_items} de {batch.total_items} boletos falharam no Sicredi"
+                )
 
         batch.results = results
         await db.commit()
@@ -277,12 +282,16 @@ async def _process_batch_creation_async(batch_id: str, company_id: str):
 def process_batch_creation(self, batch_id: str, company_id: str):
     """Celery task: create multiple boletos in batch via Sicredi API."""
     try:
-        _run_async(_process_batch_creation_async(batch_id, company_id))
+        run_in_task_loop(
+            lambda sf: _process_batch_creation_async(sf, batch_id, company_id)
+        )
     except Exception as exc:
         logger.error("batch_creation_task_failed", batch_id=batch_id, error=str(exc))
         # Mark batch as failed
         try:
-            _run_async(_mark_batch_failed(batch_id, str(exc)))
+            run_in_task_loop(
+                lambda sf: _mark_batch_failed(sf, batch_id, str(exc))
+            )
         except Exception:
             pass
         self.retry(exc=exc)
@@ -292,10 +301,11 @@ def process_batch_creation(self, batch_id: str, company_id: str):
 # Batch Operations (bulk actions on existing boletos)
 # ---------------------------------------------------------------------------
 
-async def _process_batch_operation_async(batch_id: str, company_id: str):
+async def _process_batch_operation_async(
+    session_factory: TaskSessionFactory, batch_id: str, company_id: str
+):
     """Execute a bulk action on multiple boletos sequentially."""
     from sqlalchemy import select
-    from app.core.database import async_session_factory
     from app.models.batch_operation import BatchOperation
     from app.models.boleto import Boleto
     from app.models.enums import BoletoStatus
@@ -308,7 +318,7 @@ async def _process_batch_operation_async(batch_id: str, company_id: str):
         ConcederAbatimentoRequest,
     )
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         stmt = select(BatchOperation).where(BatchOperation.id == UUID(batch_id))
         result = await db.execute(stmt)
         batch = result.scalar_one_or_none()
@@ -478,13 +488,14 @@ async def _execute_action(sicredi_client, action: str, nosso_numero: str, input_
         raise ValueError(f"Unknown action: {action}")
 
 
-async def _mark_batch_failed(batch_id: str, error: str):
+async def _mark_batch_failed(
+    session_factory: TaskSessionFactory, batch_id: str, error: str
+):
     """Mark a batch operation as failed (used by retry handler)."""
     from sqlalchemy import select
-    from app.core.database import async_session_factory
     from app.models.batch_operation import BatchOperation
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         stmt = select(BatchOperation).where(BatchOperation.id == UUID(batch_id))
         result = await db.execute(stmt)
         batch = result.scalar_one_or_none()
@@ -498,11 +509,15 @@ async def _mark_batch_failed(batch_id: str, error: str):
 def process_batch_operation(self, batch_id: str, company_id: str):
     """Celery task: execute a bulk action on multiple boletos."""
     try:
-        _run_async(_process_batch_operation_async(batch_id, company_id))
+        run_in_task_loop(
+            lambda sf: _process_batch_operation_async(sf, batch_id, company_id)
+        )
     except Exception as exc:
         logger.error("batch_operation_task_failed", batch_id=batch_id, error=str(exc))
         try:
-            _run_async(_mark_batch_failed(batch_id, str(exc)))
+            run_in_task_loop(
+                lambda sf: _mark_batch_failed(sf, batch_id, str(exc))
+            )
         except Exception:
             pass
         self.retry(exc=exc)

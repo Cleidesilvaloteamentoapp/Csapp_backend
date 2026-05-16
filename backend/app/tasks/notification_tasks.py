@@ -1,23 +1,18 @@
 
 """Celery tasks for notifications (email + WhatsApp)."""
 
-import asyncio
 from datetime import date, timedelta
 
+from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _run_async(coro):
-    return asyncio.run(coro)
-
-
-async def _send_payment_reminders_async():
+async def _send_payment_reminders_async(session_factory: TaskSessionFactory):
     """Send reminders: 7 days before, on due date, and 1 day after."""
     from sqlalchemy import select
-    from app.core.database import async_session_factory
     from app.models.client import Client
     from app.models.client_lot import ClientLot
     from app.models.enums import InvoiceStatus
@@ -28,7 +23,7 @@ async def _send_payment_reminders_async():
     reminder_7d = today + timedelta(days=7)
     overdue_1d = today - timedelta(days=1)
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         # 7-day reminders
         rows = await db.execute(
             select(Invoice, Client)
@@ -90,44 +85,47 @@ async def _send_payment_reminders_async():
 def send_payment_reminders(self):
     """Daily task: send payment reminders and overdue alerts."""
     try:
-        _run_async(_send_payment_reminders_async())
+        run_in_task_loop(_send_payment_reminders_async)
     except Exception as exc:
         logger.error("send_reminders_failed", error=str(exc))
         self.retry(exc=exc)
 
 
+async def _notify_service_order_update_async(
+    session_factory: TaskSessionFactory, order_id: str, new_status: str
+):
+    from sqlalchemy import select
+    from app.models.client import Client
+    from app.models.service import ServiceOrder
+    from app.services.email_service import send_service_order_update
+
+    async with session_factory() as db:
+        row = await db.execute(
+            select(ServiceOrder, Client)
+            .join(Client, Client.id == ServiceOrder.client_id)
+            .where(ServiceOrder.id == order_id)
+        )
+        result = row.one_or_none()
+        if not result:
+            logger.warning("notify_os_not_found", order_id=order_id)
+            return
+
+        _order, client = result
+        await send_service_order_update(
+            to=client.email,
+            name=client.full_name,
+            order_id=order_id,
+            new_status=new_status,
+        )
+
+
 @celery.task(bind=True, max_retries=3, default_retry_delay=60)
 def notify_service_order_update(self, order_id: str, new_status: str):
     """Send notification when a service order status changes."""
-
-    async def _notify():
-        from sqlalchemy import select
-        from app.core.database import async_session_factory
-        from app.models.client import Client
-        from app.models.service import ServiceOrder
-        from app.services.email_service import send_service_order_update
-
-        async with async_session_factory() as db:
-            row = await db.execute(
-                select(ServiceOrder, Client)
-                .join(Client, Client.id == ServiceOrder.client_id)
-                .where(ServiceOrder.id == order_id)
-            )
-            result = row.one_or_none()
-            if not result:
-                logger.warning("notify_os_not_found", order_id=order_id)
-                return
-
-            _order, client = result
-            await send_service_order_update(
-                to=client.email,
-                name=client.full_name,
-                order_id=order_id,
-                new_status=new_status,
-            )
-
     try:
-        _run_async(_notify())
+        run_in_task_loop(
+            lambda sf: _notify_service_order_update_async(sf, order_id, new_status)
+        )
     except Exception as exc:
         logger.error("notify_os_failed", order_id=order_id, error=str(exc))
         self.retry(exc=exc)
@@ -137,10 +135,9 @@ def notify_service_order_update(self, order_id: str, new_status: str):
 # WhatsApp payment reminders (parallel to email reminders)
 # ---------------------------------------------------------------------------
 
-async def _send_whatsapp_reminders_async():
+async def _send_whatsapp_reminders_async(session_factory: TaskSessionFactory):
     """Send WhatsApp reminders: 7 days before, on due date, 1 day after."""
     from sqlalchemy import select
-    from app.core.database import async_session_factory
     from app.models.client import Client
     from app.models.client_lot import ClientLot
     from app.models.enums import InvoiceStatus
@@ -154,7 +151,7 @@ async def _send_whatsapp_reminders_async():
     reminder_7d = today + timedelta(days=7)
     overdue_1d = today - timedelta(days=1)
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         # 7-day WhatsApp reminders
         rows = await db.execute(
             select(Invoice, Client)
@@ -241,7 +238,7 @@ async def _send_whatsapp_reminders_async():
 def send_whatsapp_reminders(self):
     """Daily task: send WhatsApp payment reminders and overdue alerts."""
     try:
-        _run_async(_send_whatsapp_reminders_async())
+        run_in_task_loop(_send_whatsapp_reminders_async)
     except Exception as exc:
         logger.error("whatsapp_reminders_failed", error=str(exc))
         self.retry(exc=exc)
@@ -251,14 +248,13 @@ def send_whatsapp_reminders(self):
 # Overdue escalation (30 / 60 / 90 day alerts + auto-distrato)
 # ---------------------------------------------------------------------------
 
-async def _overdue_escalation_async():
+async def _overdue_escalation_async(session_factory: TaskSessionFactory):
     """Escalation alerts at 30, 60, 90 days overdue.
 
     At 90+ days: triggers automatic rescission (distrato) process and notifies
     the client via email + WhatsApp.
     """
     from sqlalchemy import select, func, update
-    from app.core.database import async_session_factory
     from app.models.client import Client
     from app.models.client_lot import ClientLot
     from app.models.enums import (
@@ -274,7 +270,7 @@ async def _overdue_escalation_async():
 
     today = date.today()
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         # Find clients with overdue invoices grouped by oldest due date
         rows = await db.execute(
             select(
@@ -429,7 +425,7 @@ async def _overdue_escalation_async():
 def overdue_escalation(self):
     """Daily task: escalation alerts at 30/60/90 days + auto-distrato at 90+ days."""
     try:
-        _run_async(_overdue_escalation_async())
+        run_in_task_loop(_overdue_escalation_async)
     except Exception as exc:
         logger.error("overdue_escalation_failed", error=str(exc))
         self.retry(exc=exc)
@@ -439,17 +435,16 @@ def overdue_escalation(self):
 # Cycle completion notification
 # ---------------------------------------------------------------------------
 
-async def _notify_cycle_completion_async():
+async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
     """Create CycleApproval records when a 12-installment cycle completes."""
     from sqlalchemy import select, func
-    from app.core.database import async_session_factory
     from app.models.client_lot import ClientLot
     from app.models.cycle_approval import CycleApproval
     from app.models.enums import ClientLotStatus, CycleApprovalStatus, InvoiceStatus
     from app.models.invoice import Invoice
     from app.services.email_service import send_admin_alert
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         rows = await db.execute(
             select(ClientLot).where(ClientLot.status == ClientLotStatus.ACTIVE)
         )
@@ -523,7 +518,7 @@ async def _notify_cycle_completion_async():
 def check_cycle_completions(self):
     """Daily task: check for completed 12-installment cycles and create approval requests."""
     try:
-        _run_async(_notify_cycle_completion_async())
+        run_in_task_loop(_notify_cycle_completion_async)
     except Exception as exc:
         logger.error("cycle_completion_check_failed", error=str(exc))
         self.retry(exc=exc)

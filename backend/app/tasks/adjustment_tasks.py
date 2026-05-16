@@ -1,21 +1,17 @@
 
 """Celery tasks for annual IPCA adjustment and admin alerts."""
 
-import asyncio
 from datetime import date, timedelta
 from decimal import Decimal
 
+from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _run_async(coro):
-    return asyncio.run(coro)
-
-
-async def _apply_annual_adjustments_async():
+async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
     """Apply per-lot index + fixed rate adjustments to active contracts.
 
     Each contract can use a different index (IPCA, IGPM, CUB, INPC) and custom
@@ -25,17 +21,16 @@ async def _apply_annual_adjustments_async():
     Default: IPCA + 5% fixed rate.
     Only applies to contracts where the last 12-installment cycle is fully paid.
     """
-    from sqlalchemy import select, func
-    from app.core.database import async_session_factory
+    from sqlalchemy import select
     from app.models.client_lot import ClientLot
-    from app.models.enums import AdjustmentIndex, ClientLotStatus, ContractEventType, InvoiceStatus
+    from app.models.enums import ClientLotStatus, ContractEventType, InvoiceStatus
     from app.models.invoice import Invoice
     from app.services.contract_history_service import record_event
     from app.services.index_service import get_accumulated_index, calculate_adjusted_value
 
     today = date.today()
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         # Find active contracts that need adjustment (not adjusted this year)
         one_year_ago = today - timedelta(days=365)
         rows = await db.execute(
@@ -152,16 +147,15 @@ async def _apply_annual_adjustments_async():
 def apply_annual_adjustments(self):
     """Annual task: apply IPCA + fixed rate adjustment to eligible contracts."""
     try:
-        _run_async(_apply_annual_adjustments_async())
+        run_in_task_loop(_apply_annual_adjustments_async)
     except Exception as exc:
         logger.error("annual_adjustment_failed", error=str(exc))
         self.retry(exc=exc)
 
 
-async def _send_admin_alerts_async():
+async def _send_admin_alerts_async(session_factory: TaskSessionFactory):
     """Send admin alerts for cycle completions and critical defaulters."""
     from sqlalchemy import select, func
-    from app.core.database import async_session_factory
     from app.models.client import Client
     from app.models.client_lot import ClientLot
     from app.models.enums import ClientLotStatus, ClientStatus, InvoiceStatus
@@ -171,7 +165,7 @@ async def _send_admin_alerts_async():
     today = date.today()
     ninety_days_ago = today - timedelta(days=90)
 
-    async with async_session_factory() as db:
+    async with session_factory() as db:
         # Alert 1: Clients with 90+ days overdue (rescission trigger)
         critical_rows = await db.execute(
             select(Client.id, Client.full_name, Client.company_id, func.min(Invoice.due_date).label("oldest_due"))
@@ -243,7 +237,7 @@ async def _send_admin_alerts_async():
 def send_admin_alerts(self):
     """Daily task: send admin alerts for critical situations."""
     try:
-        _run_async(_send_admin_alerts_async())
+        run_in_task_loop(_send_admin_alerts_async)
     except Exception as exc:
         logger.error("admin_alerts_failed", error=str(exc))
         self.retry(exc=exc)

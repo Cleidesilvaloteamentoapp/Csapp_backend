@@ -38,7 +38,9 @@ async def list_clients(
     if search:
         pattern = f"%{search}%"
         base = base.where(
-            (Client.full_name.ilike(pattern)) | (Client.cpf_cnpj.ilike(pattern))
+            (Client.full_name.ilike(pattern))
+            | (Client.cpf_cnpj.ilike(pattern))
+            | (Client.email.ilike(pattern))
         )
 
     count_q = select(func.count()).select_from(base.subquery())
