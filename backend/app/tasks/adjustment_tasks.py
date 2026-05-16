@@ -190,6 +190,7 @@ async def _send_admin_alerts_async(session_factory: TaskSessionFactory):
                         f"De acordo com a política, contratos com 90+ dias de atraso "
                         f"devem iniciar processo de rescisão."
                     ),
+                    db=db,
                 )
             except Exception as exc:
                 logger.warning("admin_alert_failed", client_id=str(row.id), error=str(exc))
@@ -226,6 +227,7 @@ async def _send_admin_alerts_async(session_factory: TaskSessionFactory):
                                 f"O cliente {row.full_name} completou o ciclo {row.current_cycle} "
                                 f"de 12 parcelas. Reajuste anual deve ser aplicado."
                             ),
+                            db=db,
                         )
                     except Exception as exc:
                         logger.warning("cycle_alert_failed", cl_id=str(row.cl_id), error=str(exc))

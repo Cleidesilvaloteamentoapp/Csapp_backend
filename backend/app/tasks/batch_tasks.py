@@ -12,6 +12,29 @@ from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+def _sicredi_or_none(value: str | None) -> str | None:
+    """Return None for 'ISENTO' so the field is excluded from the Sicredi payload.
+
+    The Sicredi API accepts VALOR or PERCENTUAL for juros/multa/desconto but
+    rejects the string 'ISENTO' with HTTP 400. None → field omitted by
+    `CriarBoletoRequest.to_api_payload()` (exclude_none=True).
+    """
+    if not value or value.upper() == "ISENTO":
+        return None
+    return value
+
+
+def _clamp_negativacao(days: int | None) -> int | None:
+    """Return None if days is outside the Sicredi-accepted range [3, 99]."""
+    if days is None:
+        return None
+    try:
+        d = int(days)
+    except (TypeError, ValueError):
+        return None
+    return d if 3 <= d <= 99 else None
+
+
 FREQUENCY_MONTHS = {
     "MENSAL": 1,
     "TRIMESTRAL": 3,
@@ -153,17 +176,21 @@ async def _process_batch_creation_async(
                 valor=valor,
                 seuNumero=seu_numero,
                 beneficiarioFinal=beneficiario,
-                tipoDesconto=input_data.get("tipo_desconto"),
+                tipoDesconto=_sicredi_or_none(input_data.get("tipo_desconto")),
                 valorDesconto1=input_data.get("valor_desconto_1"),
                 valorDesconto2=input_data.get("valor_desconto_2"),
                 valorDesconto3=input_data.get("valor_desconto_3"),
-                tipoJuros=input_data.get("tipo_juros"),
+                # Sicredi rejects "ISENTO" — only VALOR/PERCENTUAL are valid values.
+                # When the user picks "Isento", the frontend omits the field; however
+                # older batch records may have stored "ISENTO" in input_data. Filter it.
+                tipoJuros=_sicredi_or_none(input_data.get("tipo_juros")),
                 juros=input_data.get("juros"),
-                tipoMulta=input_data.get("tipo_multa"),
+                tipoMulta=_sicredi_or_none(input_data.get("tipo_multa")),
                 multa=input_data.get("multa"),
                 descontoAntecipado=input_data.get("desconto_antecipado"),
                 diasProtestoAuto=input_data.get("dias_protesto_auto"),
-                diasNegativacaoAuto=input_data.get("dias_negativacao_auto"),
+                # Sicredi requires 3-99 days; values outside that range cause 400.
+                diasNegativacaoAuto=_clamp_negativacao(input_data.get("dias_negativacao_auto")),
                 validadeAposVencimento=input_data.get("validade_apos_vencimento"),
                 informativos=input_data.get("informativos"),
                 mensagens=input_data.get("mensagens"),

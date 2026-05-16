@@ -312,6 +312,7 @@ async def _overdue_escalation_async(session_factory: TaskSessionFactory):
                             f"O cliente {row.full_name} está com {days_overdue} dias de atraso. "
                             f"Verificar possibilidade de acordo."
                         ),
+                        db=db,
                     )
                 except Exception as exc:
                     logger.warning("30d_alert_failed", client_id=str(row.client_id), error=str(exc))
@@ -326,6 +327,7 @@ async def _overdue_escalation_async(session_factory: TaskSessionFactory):
                             f"ATENÇÃO: O cliente {row.full_name} está com {days_overdue} dias de atraso. "
                             f"Notificação extrajudicial recomendada."
                         ),
+                        db=db,
                     )
                     if row.email:
                         await send_rescission_alert(
@@ -401,6 +403,7 @@ async def _overdue_escalation_async(session_factory: TaskSessionFactory):
                             f"por {days_overdue} dias de inadimplência. "
                             f"Lote liberado para revenda."
                         ),
+                        db=db,
                     )
 
                     auto_distrato_count += 1
@@ -506,6 +509,7 @@ async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
                         f"Uma solicitação de aprovação para o ciclo {next_cycle} foi criada. "
                         f"Valor atual da parcela: R${cl.current_installment_value}."
                     ),
+                    db=db,
                 )
             except Exception as exc:
                 logger.warning("cycle_completion_alert_failed", cl_id=str(cl.id), error=str(exc))

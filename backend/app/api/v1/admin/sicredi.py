@@ -232,9 +232,10 @@ async def criar_boleto(
         dataDesconto1=payload.data_desconto_1,
         dataDesconto2=payload.data_desconto_2,
         dataDesconto3=payload.data_desconto_3,
-        tipoJuros=payload.tipo_juros,
+        # 'ISENTO' is not a valid Sicredi value; omit the field entirely.
+        tipoJuros=payload.tipo_juros if payload.tipo_juros and payload.tipo_juros.upper() != "ISENTO" else None,
         juros=payload.juros,
-        tipoMulta=payload.tipo_multa,
+        tipoMulta=payload.tipo_multa if payload.tipo_multa and payload.tipo_multa.upper() != "ISENTO" else None,
         multa=payload.multa,
         descontoAntecipado=payload.desconto_antecipado,
         diasProtestoAuto=payload.dias_protesto_auto,

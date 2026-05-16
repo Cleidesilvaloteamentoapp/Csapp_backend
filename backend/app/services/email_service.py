@@ -120,27 +120,41 @@ async def send_service_order_update(to: str, name: str, order_id: str, new_statu
     await send_email(to=to, subject="OS atualizada", html=html)
 
 
-async def send_admin_alert(company_id: str, subject: str, message: str) -> None:
+async def send_admin_alert(
+    company_id: str,
+    subject: str,
+    message: str,
+    db=None,
+) -> None:
     """Send an alert email to all admins of a company.
 
-    In production, this should look up admin emails from the database.
-    For now, it sends to the configured SMTP_FROM_EMAIL as a fallback.
+    Accepts an optional `db` session so that Celery tasks that already have
+    their own session (created via run_in_task_loop) can pass it in — this
+    prevents `RuntimeError: Event loop is closed` when the function tries to
+    open a new session against the global engine.
     """
     from sqlalchemy import select
-    from app.core.database import async_session_factory
     from app.models.user import Profile
     from app.models.enums import UserRole
 
     admin_emails = []
-    try:
-        async with async_session_factory() as db:
-            rows = await db.execute(
-                select(Profile.email).where(
-                    Profile.company_id == company_id,
-                    Profile.role == UserRole.COMPANY_ADMIN,
-                )
+
+    async def _lookup(session) -> list[str]:
+        rows = await session.execute(
+            select(Profile.email).where(
+                Profile.company_id == company_id,
+                Profile.role == UserRole.COMPANY_ADMIN,
             )
-            admin_emails = [r[0] for r in rows.all() if r[0]]
+        )
+        return [r[0] for r in rows.all() if r[0]]
+
+    try:
+        if db is not None:
+            admin_emails = await _lookup(db)
+        else:
+            from app.core.database import async_session_factory
+            async with async_session_factory() as fresh_db:
+                admin_emails = await _lookup(fresh_db)
     except Exception as exc:
         logger.warning("admin_email_lookup_failed", company_id=company_id, error=str(exc))
 
