@@ -33,8 +33,12 @@ async def list_clients(
     """Paginated list of clients for the current tenant."""
     base = select(Client).where(Client.company_id == company_id)
 
-    if status_filter:
-        base = base.where(Client.status == status_filter)
+    if status_filter and status_filter.lower() != "all":
+        try:
+            enum_val = ClientStatus(status_filter.upper())
+            base = base.where(Client.status == enum_val)
+        except ValueError:
+            pass
     if search:
         pattern = f"%{search}%"
         base = base.where(
