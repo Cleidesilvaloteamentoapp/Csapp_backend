@@ -22,6 +22,7 @@ from app.models.invoice import Invoice
 from app.models.boleto import Boleto
 from app.schemas.sicredi import WebhookEventResponse
 from app.services.sicredi.schemas import WebhookEventPayload
+from app.services.sicredi_audit_service import DIRECTION_INBOUND, log_sicredi_event
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -92,6 +93,19 @@ async def sicredi_webhook(
         select(Invoice).where(Invoice.barcode == nosso_numero)
     )
     invoice = result_invoice.scalar_one_or_none()
+
+    # Audit: persist every inbound webhook (matched or not) for the admin trail.
+    await log_sicredi_event(
+        db,
+        direction=DIRECTION_INBOUND,
+        event_type=f"WEBHOOK_{movimento.upper()}" if movimento else "WEBHOOK",
+        company_id=boleto.company_id if boleto else None,
+        nosso_numero=nosso_numero,
+        boleto_id=boleto.id if boleto else None,
+        invoice_id=(boleto.invoice_id if boleto else None) or (invoice.id if invoice else None),
+        success=True,
+        payload=body,
+    )
 
     if not boleto and not invoice:
         logger.warning("sicredi_webhook_boleto_not_found", nosso_numero=nosso_numero)

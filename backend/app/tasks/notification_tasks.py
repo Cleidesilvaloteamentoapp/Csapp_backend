@@ -267,11 +267,15 @@ async def _overdue_escalation_async(session_factory: TaskSessionFactory):
     from app.services.contract_history_service import record_event
     from app.services.email_service import send_admin_alert, send_rescission_alert
     from app.services.whatsapp_service import send_whatsapp_message
+    from app.services.rescission_service import trigger_automatic_rescission
 
     today = date.today()
 
+    # Contract triggers for rescission: >90 days overdue OR 3+ overdue parcelas.
+    OVERDUE_PARCELAS_LIMIT = 3
+
     async with session_factory() as db:
-        # Find clients with overdue invoices grouped by oldest due date
+        # Find clients with overdue invoices: oldest due date + how many are overdue.
         rows = await db.execute(
             select(
                 Client.id.label("client_id"),
@@ -281,6 +285,7 @@ async def _overdue_escalation_async(session_factory: TaskSessionFactory):
                 Client.company_id,
                 ClientLot.id.label("client_lot_id"),
                 func.min(Invoice.due_date).label("oldest_due"),
+                func.count(Invoice.id).label("overdue_count"),
             )
             .join(ClientLot, ClientLot.client_id == Client.id)
             .join(Invoice, Invoice.client_lot_id == ClientLot.id)
@@ -298,8 +303,75 @@ async def _overdue_escalation_async(session_factory: TaskSessionFactory):
 
         for row in rows.all():
             days_overdue = (today - row.oldest_due).days
+            overdue_count = row.overdue_count or 0
+            # Either trigger rescinds the contract (per the contract clauses).
+            should_rescind = days_overdue >= 90 or overdue_count >= OVERDUE_PARCELAS_LIMIT
 
-            if days_overdue < 30:
+            if days_overdue < 30 and not should_rescind:
+                continue
+
+            # Rescission trigger (>90 days OR 3+ overdue parcelas): create a
+            # PENDING, REVERSIBLE rescission — never hard-delete. The client is
+            # treated as inadimplente and warned of the risk of losing the lot;
+            # the admin approves (finalize) or reverts (after negotiation).
+            if should_rescind:
+                try:
+                    reason = (
+                        f"Inadimplência: {overdue_count} parcela(s) em atraso, "
+                        f"{days_overdue} dias desde o vencimento mais antigo "
+                        f"({row.oldest_due.isoformat()})."
+                    )
+                    rescission = await trigger_automatic_rescission(
+                        db,
+                        row.company_id,
+                        client_id=row.client_id,
+                        client_lot_id=row.client_lot_id,
+                        reason=reason,
+                        metadata={
+                            "days_overdue": days_overdue,
+                            "overdue_count": overdue_count,
+                            "oldest_due_date": row.oldest_due.isoformat(),
+                        },
+                    )
+                    if rescission is None:
+                        continue  # already has an open rescission
+
+                    # Warn the client of the risk (contract not yet rescinded).
+                    if row.email:
+                        await send_rescission_alert(
+                            to=row.email, name=row.full_name, days_overdue=days_overdue,
+                        )
+                    if row.phone:
+                        await send_whatsapp_message(
+                            to=row.phone,
+                            body=(
+                                f"Prezado(a) {row.full_name}, seu contrato está em processo de "
+                                f"rescisão por inadimplência ({overdue_count} parcela(s), {days_overdue} dias). "
+                                f"Entre em contato URGENTE para negociar e evitar a perda do lote."
+                            ),
+                            db=db,
+                            company_id=row.company_id,
+                        )
+
+                    # Admin alert: pending approval (reversible).
+                    await send_admin_alert(
+                        company_id=str(row.company_id),
+                        subject=f"RESCISÃO PENDENTE: {row.full_name}",
+                        message=(
+                            f"Rescisão automática criada para {row.full_name} "
+                            f"({overdue_count} parcela(s) em atraso, {days_overdue} dias). "
+                            f"Cobrança suspensa. Aprove para liberar o lote ou reverta após negociação."
+                        ),
+                        db=db,
+                    )
+                    auto_distrato_count += 1
+                except Exception as exc:
+                    logger.error(
+                        "auto_rescission_failed",
+                        client_id=str(row.client_id),
+                        client_lot_id=str(row.client_lot_id),
+                        error=str(exc),
+                    )
                 continue
 
             # 30-day alert
@@ -338,84 +410,6 @@ async def _overdue_escalation_async(session_factory: TaskSessionFactory):
                 except Exception as exc:
                     logger.warning("60d_alert_failed", client_id=str(row.client_id), error=str(exc))
 
-            # 90-day: auto-distrato
-            elif days_overdue >= 90:
-                try:
-                    # Mark client as DEFAULTER if not already
-                    await db.execute(
-                        update(Client)
-                        .where(Client.id == row.client_id)
-                        .values(status=ClientStatus.DEFAULTER)
-                    )
-
-                    # Mark client_lot as RESCINDED
-                    await db.execute(
-                        update(ClientLot)
-                        .where(ClientLot.id == row.client_lot_id)
-                        .values(status=ClientLotStatus.RESCINDED)
-                    )
-
-                    # Record contract history event
-                    await record_event(
-                        db,
-                        company_id=row.company_id,
-                        client_id=row.client_id,
-                        client_lot_id=row.client_lot_id,
-                        event_type=ContractEventType.AUTO_RESCISSION,
-                        description=(
-                            f"Distrato automático por inadimplência de {days_overdue} dias. "
-                            f"Parcela mais antiga vencida em {row.oldest_due.isoformat()}."
-                        ),
-                        metadata_json={
-                            "days_overdue": days_overdue,
-                            "oldest_due_date": row.oldest_due.isoformat(),
-                            "triggered_by": "system_auto_distrato",
-                        },
-                    )
-
-                    # Notify client via email
-                    if row.email:
-                        await send_rescission_alert(
-                            to=row.email,
-                            name=row.full_name,
-                            days_overdue=days_overdue,
-                        )
-
-                    # Notify client via WhatsApp
-                    if row.phone:
-                        await send_whatsapp_message(
-                            to=row.phone,
-                            body=(
-                                f"Prezado(a) {row.full_name}, informamos que seu contrato "
-                                f"foi rescindido automaticamente devido a {days_overdue} dias "
-                                f"de inadimplência. Entre em contato para regularização."
-                            ),
-                            db=db,
-                            company_id=row.company_id,
-                        )
-
-                    # Admin alert
-                    await send_admin_alert(
-                        company_id=str(row.company_id),
-                        subject=f"DISTRATO AUTOMÁTICO: {row.full_name}",
-                        message=(
-                            f"Distrato automático aplicado ao cliente {row.full_name} "
-                            f"por {days_overdue} dias de inadimplência. "
-                            f"Lote liberado para revenda."
-                        ),
-                        db=db,
-                    )
-
-                    auto_distrato_count += 1
-
-                except Exception as exc:
-                    logger.error(
-                        "auto_distrato_failed",
-                        client_id=str(row.client_id),
-                        client_lot_id=str(row.client_lot_id),
-                        error=str(exc),
-                    )
-
         await db.commit()
         logger.info(
             "overdue_escalation_completed",
@@ -441,9 +435,10 @@ def overdue_escalation(self):
 async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
     """Create CycleApproval records when a 12-installment cycle completes."""
     from sqlalchemy import select, func
+    from app.models.boleto import Boleto
     from app.models.client_lot import ClientLot
     from app.models.cycle_approval import CycleApproval
-    from app.models.enums import ClientLotStatus, CycleApprovalStatus, InvoiceStatus
+    from app.models.enums import BoletoStatus, ClientLotStatus, CycleApprovalStatus, InvoiceStatus
     from app.models.invoice import Invoice
     from app.services.email_service import send_admin_alert
 
@@ -459,13 +454,17 @@ async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
             cycle_start = (cl.current_cycle - 1) * cycle_size + 1
             cycle_end = cl.current_cycle * cycle_size
 
-            # Count paid invoices in current cycle
+            # Count installments in the cycle settled via a LIQUIDADO boleto.
+            # Renewal does not recognize payments made by other means.
             paid_q = await db.execute(
-                select(func.count()).where(
+                select(func.count(func.distinct(Invoice.id)))
+                .join(Boleto, Boleto.invoice_id == Invoice.id)
+                .where(
                     Invoice.client_lot_id == cl.id,
                     Invoice.installment_number >= cycle_start,
                     Invoice.installment_number <= cycle_end,
                     Invoice.status == InvoiceStatus.PAID,
+                    Boleto.status == BoletoStatus.LIQUIDADO,
                 )
             )
             paid_count = paid_q.scalar() or 0

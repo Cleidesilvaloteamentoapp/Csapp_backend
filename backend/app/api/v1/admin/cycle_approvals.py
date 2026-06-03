@@ -2,6 +2,7 @@
 """Admin endpoints for managing cycle approval requests."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
@@ -30,12 +31,106 @@ from app.schemas.cycle_approval import (
     CycleApproveRequest,
     CycleRejectRequest,
 )
+from app.schemas.financial_settings import rate_to_percent
+from app.schemas.lot import EffectiveRatesResponse
+from app.services.client_lot_service import get_remaining_installments
 from app.services.contract_history_service import record_event
+from app.services.financial_defaults_service import get_all_effective_rates
+from app.services.index_service import calculate_adjusted_value, get_accumulated_index
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/cycle-approvals", tags=["Admin Cycle Approvals"])
+
+
+async def _enrich_approval(
+    db: AsyncSession, ap: CycleApproval
+) -> CycleApprovalWithClientResponse:
+    """Build the enriched approval response with rates, previous adjustment and suggestion."""
+    cl = ap.client_lot
+    client_name = lot_identifier = total_installments = None
+    effective_rates = last_adjustment_date = previous_adjustment_details = None
+    suggested_new_value = suggested_adjustment_details = None
+    remaining_installments = installments_to_generate = None
+
+    if cl:
+        total_installments = cl.total_installments
+        last_adjustment_date = cl.last_adjustment_date
+
+        client_name = (
+            await db.execute(select(Client.full_name).where(Client.id == cl.client_id))
+        ).scalar_one_or_none()
+        lot_data = (
+            await db.execute(select(Lot.block, Lot.number).where(Lot.id == cl.lot_id))
+        ).one_or_none()
+        if lot_data:
+            lot_identifier = f"Qd {lot_data[0]} Lt {lot_data[1]}"
+
+        # Effective rates currently applied to the contract.
+        rates = await get_all_effective_rates(db, cl)
+        effective_rates = EffectiveRatesResponse(
+            penalty_rate=rate_to_percent(rates["penalty_rate"]),
+            daily_interest_rate=rate_to_percent(rates["daily_interest_rate"]),
+            adjustment_index=rates["adjustment_index"].value,
+            adjustment_frequency=rates["adjustment_frequency"].value,
+            adjustment_custom_rate=rate_to_percent(rates["adjustment_custom_rate"]),
+        )
+
+        # Cycle debit (how many parcelas remain / will be generated, e.g. "12 de 24").
+        try:
+            info = await get_remaining_installments(db, cl.id)
+            remaining_installments = info.remaining_installments
+            installments_to_generate = min(12, info.remaining_installments)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("remaining_installments_failed", approval_id=str(ap.id), error=str(exc))
+
+        # Previously applied adjustment (most recent approved cycle before this one).
+        prev = (
+            await db.execute(
+                select(CycleApproval)
+                .where(
+                    CycleApproval.client_lot_id == cl.id,
+                    CycleApproval.status == CycleApprovalStatus.APPROVED,
+                    CycleApproval.cycle_number < ap.cycle_number,
+                )
+                .order_by(CycleApproval.cycle_number.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if prev:
+            previous_adjustment_details = prev.adjustment_details
+
+        # Server-computed suggestion (IPCA accumulated + fixed rate) for pending approvals.
+        if ap.status == CycleApprovalStatus.PENDING:
+            try:
+                index_pct = await get_accumulated_index(
+                    rates["adjustment_index"], db=db, company_id=cl.company_id, months=12
+                )
+                custom_pct = rates["adjustment_custom_rate"] * Decimal("100")
+                base = ap.previous_installment_value or cl.current_installment_value
+                if base is not None:
+                    calc = calculate_adjusted_value(base, index_pct, custom_pct)
+                    suggested_new_value = calc["new_value"]
+                    suggested_adjustment_details = {
+                        k: (str(v) if isinstance(v, Decimal) else v) for k, v in calc.items()
+                    }
+            except Exception as exc:
+                logger.warning("cycle_suggestion_failed", approval_id=str(ap.id), error=str(exc))
+
+    return CycleApprovalWithClientResponse(
+        **CycleApprovalResponse.model_validate(ap).model_dump(),
+        client_name=client_name,
+        lot_identifier=lot_identifier,
+        total_installments=total_installments,
+        effective_rates=effective_rates,
+        last_adjustment_date=last_adjustment_date,
+        previous_adjustment_details=previous_adjustment_details,
+        suggested_new_value=suggested_new_value,
+        suggested_adjustment_details=suggested_adjustment_details,
+        remaining_installments=remaining_installments,
+        installments_to_generate=installments_to_generate,
+    )
 
 
 @router.get("", response_model=list[CycleApprovalWithClientResponse])
@@ -60,35 +155,7 @@ async def list_cycle_approvals(
     result = await db.execute(stmt)
     approvals = result.scalars().all()
 
-    responses = []
-    for ap in approvals:
-        # Enrich with client/lot info
-        cl = ap.client_lot
-        client_name = None
-        lot_identifier = None
-        total_installments = None
-
-        if cl:
-            total_installments = cl.total_installments
-            # Get client name
-            client_row = await db.execute(select(Client.full_name).where(Client.id == cl.client_id))
-            cn = client_row.scalar_one_or_none()
-            client_name = cn if cn else None
-            # Get lot identifier
-            lot_row = await db.execute(select(Lot.block, Lot.number).where(Lot.id == cl.lot_id))
-            lot_data = lot_row.one_or_none()
-            if lot_data:
-                lot_identifier = f"Qd {lot_data[0]} Lt {lot_data[1]}"
-
-        resp = CycleApprovalWithClientResponse(
-            **CycleApprovalResponse.model_validate(ap).model_dump(),
-            client_name=client_name,
-            lot_identifier=lot_identifier,
-            total_installments=total_installments,
-        )
-        responses.append(resp)
-
-    return responses
+    return [await _enrich_approval(db, ap) for ap in approvals]
 
 
 @router.get("/{approval_id}", response_model=CycleApprovalWithClientResponse)
@@ -108,26 +175,7 @@ async def get_cycle_approval(
     if not ap:
         raise HTTPException(status_code=404, detail="Cycle approval not found")
 
-    cl = ap.client_lot
-    client_name = None
-    lot_identifier = None
-    total_installments = None
-
-    if cl:
-        total_installments = cl.total_installments
-        client_row = await db.execute(select(Client.full_name).where(Client.id == cl.client_id))
-        client_name = client_row.scalar_one_or_none()
-        lot_row = await db.execute(select(Lot.block, Lot.number).where(Lot.id == cl.lot_id))
-        lot_data = lot_row.one_or_none()
-        if lot_data:
-            lot_identifier = f"Qd {lot_data[0]} Lt {lot_data[1]}"
-
-    return CycleApprovalWithClientResponse(
-        **CycleApprovalResponse.model_validate(ap).model_dump(),
-        client_name=client_name,
-        lot_identifier=lot_identifier,
-        total_installments=total_installments,
-    )
+    return await _enrich_approval(db, ap)
 
 
 @router.post("/{approval_id}/approve", response_model=CycleApprovalResponse)

@@ -24,20 +24,28 @@ from app.models.user import Profile
 from app.schemas.common import PaginatedResponse
 from app.services import client_lot_service
 from app.services.client_lot_service import get_remaining_installments, should_generate_next_batch
-from app.schemas.financial_settings import ClientLotFinancialUpdate
+from app.services.financial_defaults_service import get_all_effective_rates
+from app.services.pricing_service import compute_plan
+from app.utils.logging import get_logger
+from app.schemas.financial_settings import ClientLotFinancialUpdate, rate_to_percent
 from app.schemas.lot import (
     ClientLotResponse,
     DevelopmentCreate,
     DevelopmentFilter,
     DevelopmentResponse,
     DevelopmentUpdate,
+    EffectiveRatesResponse,
     LotAssignRequest,
     LotCreate,
     LotResponse,
     LotUpdate,
+    PaymentPlanPreviewRequest,
+    PaymentPlanPreviewResponse,
 )
 
 router = APIRouter(prefix="/lots", tags=["Admin Lots"])
+
+logger = get_logger(__name__)
 dev_router = APIRouter(prefix="/developments", tags=["Admin Developments"])
 
 
@@ -303,20 +311,32 @@ async def assign_lot(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Calculate installment value considering down payment.
-    # If the request includes an explicit monthly_value, that overrides the
-    # automatic division (allows fixed installment regardless of math rounding).
+    # Calculate the payment plan (bidirectional: parcelas <-> valor mensal).
+    # Authoritative source of truth lives in pricing_service.compute_plan.
     plan = data.payment_plan or {}
-    num_installments = data.total_installments or int(plan.get("installments", 1))
     down_payment = data.down_payment or Decimal("0")
-    financed_value = data.total_value - down_payment
+    explicit_installments = data.total_installments or plan.get("installments")
     plan_monthly = plan.get("monthly_value")
-    if plan_monthly is not None and Decimal(str(plan_monthly)) > 0:
-        installment_value = Decimal(str(plan_monthly))
-    else:
-        installment_value = (
-            financed_value / num_installments if num_installments > 0 else financed_value
+    try:
+        computed = compute_plan(
+            total_value=data.total_value,
+            down_payment=down_payment,
+            installments=int(explicit_installments) if explicit_installments else None,
+            monthly_value=plan_monthly,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    num_installments = computed.installments
+    installment_value = computed.monthly_value
+    # Persist the computed plan back into payment_plan for transparency/audit.
+    plan = {
+        **plan,
+        "installments": num_installments,
+        "monthly_value": str(installment_value),
+        "financed_value": str(computed.financed_value),
+        "last_installment_value": str(computed.last_installment_value),
+    }
 
     # Load company financial defaults for fields not provided in the request
     from app.models.company_financial_settings import CompanyFinancialSettings
@@ -382,12 +402,19 @@ async def assign_lot(
 
     for i in range(first_cycle_count):
         due = first_due + timedelta(days=30 * i)
+        installment_number = i + 1
+        # The final installment of the whole contract absorbs the rounding residue.
+        amount = (
+            computed.last_installment_value
+            if installment_number == num_installments
+            else installment_value
+        )
         invoice = Invoice(
             company_id=cid,
             client_lot_id=cl.id,
             due_date=due,
-            amount=installment_value,
-            installment_number=i + 1,
+            amount=amount,
+            installment_number=installment_number,
             status=InvoiceStatus.PENDING,
         )
         db.add(invoice)
@@ -404,6 +431,64 @@ async def assign_lot(
     )
 
     return ClientLotResponse.model_validate(cl)
+
+
+@router.post("/assign/preview", response_model=PaymentPlanPreviewResponse)
+async def preview_assign(
+    data: PaymentPlanPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Dry-run the payment plan + effective rates without persisting anything.
+
+    Lets the frontend show the critical fields (valor financiado, parcelas, valor
+    mensal e taxas efetivas) for confirmation before the sale is committed.
+    """
+    try:
+        computed = compute_plan(
+            total_value=data.total_value,
+            down_payment=data.down_payment,
+            installments=data.total_installments,
+            monthly_value=data.monthly_value,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Resolve effective rates via a transient (unpersisted) ClientLot so we reuse
+    # the same per-lot → company → hardcoded fallback logic used at billing time.
+    transient = ClientLot(
+        company_id=admin.company_id,
+        penalty_rate=data.penalty_rate,
+        daily_interest_rate=data.daily_interest_rate,
+        adjustment_index=AdjustmentIndex(data.adjustment_index) if data.adjustment_index else None,
+        adjustment_frequency=AdjustmentFrequency(data.adjustment_frequency) if data.adjustment_frequency else None,
+        adjustment_custom_rate=data.adjustment_custom_rate,
+    )
+    rates = await get_all_effective_rates(db, transient)
+
+    effective = EffectiveRatesResponse(
+        penalty_rate=rate_to_percent(rates["penalty_rate"]),
+        daily_interest_rate=rate_to_percent(rates["daily_interest_rate"]),
+        adjustment_index=rates["adjustment_index"].value,
+        adjustment_frequency=rates["adjustment_frequency"].value,
+        adjustment_custom_rate=rate_to_percent(rates["adjustment_custom_rate"]),
+    )
+
+    first_due = data.first_due
+    if first_due is None and data.purchase_date is not None:
+        first_due = data.purchase_date + timedelta(days=30)
+
+    return PaymentPlanPreviewResponse(
+        total_value=computed.total_value,
+        down_payment=computed.down_payment,
+        financed_value=computed.financed_value,
+        installments=computed.installments,
+        monthly_value=computed.monthly_value,
+        last_installment_value=computed.last_installment_value,
+        has_residue=computed.has_residue,
+        first_due=first_due,
+        effective_rates=effective,
+    )
 
 
 @router.get("/client-lots/{client_lot_id}", response_model=ClientLotResponse)

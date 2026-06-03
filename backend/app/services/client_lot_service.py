@@ -109,6 +109,29 @@ async def get_remaining_installments(
     )
 
 
+async def get_boleto_liquidated_invoice_ids(
+    db: AsyncSession, client_lot_id: UUID
+) -> set[UUID]:
+    """Invoice IDs for this contract whose Sicredi boleto is marked LIQUIDADO.
+
+    Per the contract, only installments settled through a system boleto count
+    toward annual renewal / cycle release — payments made by any other means are
+    not recognized for liquidation. Use this to gate the 12-installment cycle.
+    """
+    from app.models.boleto import Boleto
+    from app.models.enums import BoletoStatus
+
+    rows = await db.execute(
+        select(Boleto.invoice_id)
+        .join(Invoice, Invoice.id == Boleto.invoice_id)
+        .where(
+            Invoice.client_lot_id == client_lot_id,
+            Boleto.status == BoletoStatus.LIQUIDADO,
+        )
+    )
+    return {r[0] for r in rows.all() if r[0] is not None}
+
+
 async def should_generate_next_batch(
     db: AsyncSession, client_lot_id: UUID, days_threshold: int = 30
 ) -> tuple[bool, Optional[str]]:

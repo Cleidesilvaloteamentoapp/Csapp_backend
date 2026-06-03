@@ -77,6 +77,7 @@ async def _generate_monthly_invoices_async(session_factory: TaskSessionFactory):
     from app.models.client_lot import ClientLot
     from app.models.enums import ClientLotStatus, InvoiceStatus
     from app.models.invoice import Invoice
+    from app.services.client_lot_service import get_boleto_liquidated_invoice_ids
 
     async with session_factory() as db:
         rows = await db.execute(
@@ -108,15 +109,20 @@ async def _generate_monthly_invoices_async(session_factory: TaskSessionFactory):
             current_cycle_end = cl.current_cycle * cycle_size
 
             if existing >= current_cycle_end:
-                # Need to start a new cycle — check if current cycle is fully paid
+                # Need to start a new cycle — check if current cycle is fully paid.
+                # Renewal only recognizes installments settled via a LIQUIDADO boleto.
+                liquidated_ids = await get_boleto_liquidated_invoice_ids(db, cl.id)
                 cycle_invoices = [
                     inv for inv in all_invoices
                     if current_cycle_start < inv.installment_number <= current_cycle_end
                 ]
-                unpaid = [inv for inv in cycle_invoices if inv.status != InvoiceStatus.PAID]
+                unpaid = [
+                    inv for inv in cycle_invoices
+                    if inv.status != InvoiceStatus.PAID or inv.id not in liquidated_ids
+                ]
                 if unpaid:
                     skipped_cycle_lock += 1
-                    continue  # BLOCKED: previous cycle not fully paid
+                    continue  # BLOCKED: previous cycle not fully paid via boleto
 
             # Find last invoice due date
             last_inv = await db.execute(

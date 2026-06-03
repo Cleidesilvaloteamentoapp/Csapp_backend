@@ -15,6 +15,7 @@ from app.api.v1.admin import rescissions as admin_rescissions
 from app.api.v1.admin import segunda_via as admin_segunda_via
 from app.api.v1.admin import services as admin_services
 from app.api.v1.admin import sicredi as admin_sicredi
+from app.api.v1.admin import sicredi_events as admin_sicredi_events
 from app.api.v1.admin import boletos as admin_boletos
 from app.api.v1.admin import documents as admin_documents
 from app.api.v1.admin import service_requests as admin_service_requests
@@ -58,6 +59,7 @@ api_router.include_router(admin_lots.dev_router, prefix="/admin")
 api_router.include_router(admin_financial.router, prefix="/admin")
 api_router.include_router(admin_services.router, prefix="/admin")
 api_router.include_router(admin_sicredi.router, prefix="/admin")
+api_router.include_router(admin_sicredi_events.router, prefix="/admin")
 api_router.include_router(admin_boletos.router, prefix="/admin")
 api_router.include_router(admin_contract_history.router, prefix="/admin")
 api_router.include_router(admin_renegotiations.router, prefix="/admin")

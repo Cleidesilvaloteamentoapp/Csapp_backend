@@ -169,7 +169,7 @@ class LotAssignRequest(BaseModel):
     purchase_date: date
     total_value: Decimal = Field(..., gt=0)
     down_payment: Optional[Decimal] = Field(None, ge=0)
-    total_installments: int = Field(1, ge=1, le=360)
+    total_installments: Optional[int] = Field(None, ge=1, le=360, description="Number of installments. If omitted, derived from monthly value in payment_plan.")
     annual_adjustment_rate: Optional[Decimal] = Field(None, description="Fixed annual rate on top of IPCA in %, e.g. 5 = 5%")
     penalty_rate: Optional[Decimal] = Field(None, description="Custom penalty rate in %, e.g. 2 = 2%")
     daily_interest_rate: Optional[Decimal] = Field(None, description="Custom daily interest rate in %, e.g. 0.033 = 0.033%/day")
@@ -233,3 +233,62 @@ class ClientLotResponse(BaseModel):
     @classmethod
     def db_to_percent(cls, v):
         return rate_to_percent(v)
+
+
+# ---------------------------------------------------------------------------
+# Payment plan preview (dry-run calculation + effective rates)
+# ---------------------------------------------------------------------------
+
+class PaymentPlanPreviewRequest(BaseModel):
+    """Dry-run: compute the payment plan and resolve effective rates without persisting.
+
+    Provide either ``total_installments`` or ``monthly_value`` (the other is derived).
+    Rate fields accept percentages (2 = 2%) and are optional per-lot overrides used
+    to preview the effective rates the contract would receive.
+    """
+
+    total_value: Decimal = Field(..., gt=0)
+    down_payment: Optional[Decimal] = Field(None, ge=0)
+    total_installments: Optional[int] = Field(None, ge=1, le=360)
+    monthly_value: Optional[Decimal] = Field(None, gt=0)
+    purchase_date: Optional[date] = None
+    first_due: Optional[date] = None
+    penalty_rate: Optional[Decimal] = None
+    daily_interest_rate: Optional[Decimal] = None
+    adjustment_index: Optional[str] = Field(None, pattern=r"^(IPCA|IGPM|CUB|INPC)$")
+    adjustment_frequency: Optional[str] = Field(None, pattern=r"^(MONTHLY|QUARTERLY|SEMIANNUAL|ANNUAL)$")
+    adjustment_custom_rate: Optional[Decimal] = None
+
+    @field_validator("penalty_rate", "adjustment_custom_rate", mode="before")
+    @classmethod
+    def percent_to_decimal(cls, v):
+        return rate_from_percent(v, max_percent=100)
+
+    @field_validator("daily_interest_rate", mode="before")
+    @classmethod
+    def daily_percent_to_decimal(cls, v):
+        return rate_from_percent(v, max_percent=1)
+
+
+class EffectiveRatesResponse(BaseModel):
+    """Effective rates resolved per-lot → company → hardcoded, as percentages."""
+
+    penalty_rate: Decimal
+    daily_interest_rate: Decimal
+    adjustment_index: str
+    adjustment_frequency: str
+    adjustment_custom_rate: Decimal
+
+
+class PaymentPlanPreviewResponse(BaseModel):
+    """Computed payment plan plus the effective rates that would apply."""
+
+    total_value: Decimal
+    down_payment: Decimal
+    financed_value: Decimal
+    installments: int
+    monthly_value: Decimal
+    last_installment_value: Decimal
+    has_residue: bool
+    first_due: Optional[date] = None
+    effective_rates: EffectiveRatesResponse

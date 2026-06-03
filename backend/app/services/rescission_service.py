@@ -95,6 +95,169 @@ async def create_rescission(
     return rescission
 
 
+async def trigger_automatic_rescission(
+    db: AsyncSession,
+    company_id: UUID,
+    *,
+    client_id: UUID,
+    client_lot_id: UUID,
+    reason: str,
+    metadata: Optional[dict] = None,
+) -> Optional[Rescission]:
+    """System-initiated rescission on delinquency (>90 days OR 3 overdue parcelas).
+
+    Non-destructive and reversible: it does NOT cancel invoices or release the lot.
+    It flags the client as DEFAULTER, suspends billing (lot -> IN_RESCISSION) and
+    creates a PENDING_APPROVAL rescission for the admin to approve (finalize) or
+    revert (if the client negotiates and keeps the contract).
+
+    Returns the created Rescission, or None if one is already open for this lot.
+    """
+    cl_row = await db.execute(
+        select(ClientLot).where(
+            ClientLot.id == client_lot_id,
+            ClientLot.company_id == company_id,
+        )
+    )
+    client_lot = cl_row.scalar_one_or_none()
+    if not client_lot:
+        return None
+    if client_lot.status in (ClientLotStatus.CANCELLED, ClientLotStatus.RESCINDED):
+        return None
+
+    # Skip if an open rescission already exists for this lot (avoid duplicates).
+    existing = await db.execute(
+        select(Rescission).where(
+            Rescission.client_lot_id == client_lot_id,
+            Rescission.status.in_(
+                [
+                    RescissionStatus.REQUESTED,
+                    RescissionStatus.PENDING_APPROVAL,
+                    RescissionStatus.APPROVED,
+                ]
+            ),
+        )
+    )
+    if existing.scalar_one_or_none():
+        return None
+
+    inv_rows = await db.execute(
+        select(Invoice).where(Invoice.client_lot_id == client_lot_id)
+    )
+    invoices = list(inv_rows.scalars().all())
+    total_paid = sum((inv.amount for inv in invoices if inv.status == InvoiceStatus.PAID), Decimal("0"))
+    total_debt = sum(
+        (inv.amount for inv in invoices if inv.status in (InvoiceStatus.PENDING, InvoiceStatus.OVERDUE)),
+        Decimal("0"),
+    )
+
+    rescission = Rescission(
+        company_id=company_id,
+        client_id=client_id,
+        client_lot_id=client_lot_id,
+        status=RescissionStatus.PENDING_APPROVAL,
+        reason=reason,
+        total_paid=total_paid,
+        total_debt=total_debt,
+        refund_amount=Decimal("0"),
+        penalty_amount=Decimal("0"),
+        request_date=date.today(),
+        requested_by=None,  # system-initiated
+        metadata_json={**(metadata or {}), "triggered_by": "system_inadimplencia"},
+    )
+    db.add(rescission)
+
+    # Suspend billing (reversible) and flag the client.
+    client_lot.status = ClientLotStatus.IN_RESCISSION
+    client_row = await db.execute(select(Client).where(Client.id == client_id))
+    client = client_row.scalar_one_or_none()
+    if client and client.status != ClientStatus.RESCINDED:
+        client.status = ClientStatus.DEFAULTER
+
+    await db.flush()
+
+    await record_event(
+        db,
+        company_id=company_id,
+        client_id=client_id,
+        client_lot_id=client_lot_id,
+        event_type=ContractEventType.RESCISSION_STARTED,
+        description=(
+            f"Rescisão automática pendente de aprovação. Motivo: {reason}. "
+            f"Cobrança suspensa; cliente notificado do risco de perda do lote. "
+            f"Reversível mediante negociação."
+        ),
+        amount=total_debt,
+        metadata_json=rescission.metadata_json,
+    )
+
+    logger.info(
+        "auto_rescission_pending",
+        rescission_id=str(rescission.id),
+        client_lot_id=str(client_lot_id),
+    )
+    return rescission
+
+
+async def revert_rescission(
+    db: AsyncSession,
+    company_id: UUID,
+    admin_id: UUID,
+    rescission_id: UUID,
+    *,
+    admin_notes: Optional[str] = None,
+) -> Rescission:
+    """Revert a not-yet-completed rescission (negotiation kept the contract).
+
+    Reactivates the contract and clears the defaulter flag. Cannot revert a
+    COMPLETED rescission (lot already released).
+    """
+    row = await db.execute(
+        select(Rescission).where(
+            Rescission.id == rescission_id,
+            Rescission.company_id == company_id,
+        )
+    )
+    rescission = row.scalar_one_or_none()
+    if not rescission:
+        raise ValueError("Rescission not found")
+    if rescission.status == RescissionStatus.COMPLETED:
+        raise ValueError("Cannot revert a completed rescission")
+    if rescission.status == RescissionStatus.CANCELLED:
+        raise ValueError("Rescission already cancelled")
+
+    rescission.status = RescissionStatus.CANCELLED
+    rescission.approved_by = admin_id
+    rescission.approval_date = date.today()
+    if admin_notes:
+        rescission.admin_notes = admin_notes
+
+    # Reactivate the contract (billing resumes) and client.
+    cl_row = await db.execute(select(ClientLot).where(ClientLot.id == rescission.client_lot_id))
+    client_lot = cl_row.scalar_one_or_none()
+    if client_lot and client_lot.status == ClientLotStatus.IN_RESCISSION:
+        client_lot.status = ClientLotStatus.ACTIVE
+
+    client_row = await db.execute(select(Client).where(Client.id == rescission.client_id))
+    client = client_row.scalar_one_or_none()
+    if client and client.status in (ClientStatus.DEFAULTER, ClientStatus.IN_NEGOTIATION):
+        client.status = ClientStatus.ACTIVE
+
+    await record_event(
+        db,
+        company_id=company_id,
+        client_id=rescission.client_id,
+        client_lot_id=rescission.client_lot_id,
+        event_type=ContractEventType.RESCISSION_REVERSED,
+        description="Rescisão revertida após negociação. Contrato reativado e cobrança retomada.",
+        performed_by=admin_id,
+    )
+
+    await db.flush()
+    logger.info("rescission_reverted", rescission_id=str(rescission_id))
+    return rescission
+
+
 async def approve_rescission(
     db: AsyncSession,
     company_id: UUID,

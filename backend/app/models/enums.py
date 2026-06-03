@@ -36,6 +36,8 @@ class ClientLotStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
     RESCINDED = "RESCINDED"
+    # Billing suspended while a rescission is pending; reversible during negotiation.
+    IN_RESCISSION = "IN_RESCISSION"
 
 
 class InvoiceStatus(str, enum.Enum):
@@ -115,6 +117,7 @@ class ContractEventType(str, enum.Enum):
     NOTE = "NOTE"
     TRANSFER = "TRANSFER"
     AUTO_RESCISSION = "AUTO_RESCISSION"
+    RESCISSION_REVERSED = "RESCISSION_REVERSED"
     CYCLE_APPROVED = "CYCLE_APPROVED"
     EARLY_PAYOFF_REQUEST = "EARLY_PAYOFF_REQUEST"
 

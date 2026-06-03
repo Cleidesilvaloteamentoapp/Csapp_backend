@@ -17,6 +17,7 @@ from app.schemas.rescission import (
     RescissionApprove,
     RescissionCreate,
     RescissionResponse,
+    RescissionRevert,
 )
 from app.services import rescission_service
 from app.utils.logging import get_logger
@@ -122,6 +123,27 @@ async def complete_rescission(
     try:
         rescission = await rescission_service.complete_rescission(
             db, admin.company_id, admin.id, rescission_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RescissionResponse.model_validate(rescission)
+
+
+@router.post("/{rescission_id}/revert", response_model=RescissionResponse)
+async def revert_rescission(
+    rescission_id: UUID,
+    data: RescissionRevert,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_rescissions")),
+):
+    """Revert a pending rescission (negotiation kept the contract): reactivate it.
+
+    Reactivates the contract and clears the defaulter flag. Cannot revert a
+    rescission that has already been COMPLETED.
+    """
+    try:
+        rescission = await rescission_service.revert_rescission(
+            db, admin.company_id, admin.id, rescission_id, admin_notes=data.admin_notes
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

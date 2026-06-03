@@ -83,9 +83,38 @@ class SicrediAdapter(BankProvider):
             pagador=pag,
         )
 
-        result = await client.boletos.criar(req)
         from app.services import sicredi_service
+        from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
+
+        try:
+            result = await client.boletos.criar(req)
+        except Exception as exc:
+            # Audit the failed outbound request before re-raising.
+            await log_sicredi_event(
+                self._db,
+                direction=DIRECTION_OUTBOUND,
+                event_type="BOLETO_CREATE",
+                company_id=self._company_id,
+                nosso_numero=seu_numero,
+                success=False,
+                payload={"request": req.model_dump(mode="json"), "error": str(exc)},
+            )
+            raise
+
         await sicredi_service.persist_token_cache(self._db, self._company_id)
+
+        await log_sicredi_event(
+            self._db,
+            direction=DIRECTION_OUTBOUND,
+            event_type="BOLETO_CREATE",
+            company_id=self._company_id,
+            nosso_numero=result.nossoNumero,
+            success=True,
+            payload={
+                "request": req.model_dump(mode="json"),
+                "response": result.model_dump(mode="json") if hasattr(result, "model_dump") else {},
+            },
+        )
 
         return BoletoResult(
             nosso_numero=result.nossoNumero,

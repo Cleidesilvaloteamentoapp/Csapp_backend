@@ -27,6 +27,12 @@ class RescissionApprove(BaseModel):
     admin_notes: Optional[str] = None
 
 
+class RescissionRevert(BaseModel):
+    """Payload to revert (cancel) a pending rescission after negotiation."""
+
+    admin_notes: Optional[str] = None
+
+
 class RescissionResponse(BaseModel):
     """Rescission read response."""
 
@@ -50,7 +56,7 @@ class RescissionResponse(BaseModel):
     document_path: Optional[str] = None
     metadata_json: Optional[Dict[str, Any]] = None
 
-    requested_by: UUID
+    requested_by: Optional[UUID] = None
     approved_by: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
