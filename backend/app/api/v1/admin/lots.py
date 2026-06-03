@@ -5,11 +5,12 @@ from typing import Optional
 import math
 from datetime import date, timedelta
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.audit import log_audit
 from app.core.database import get_db
@@ -26,6 +27,8 @@ from app.services import client_lot_service
 from app.services.client_lot_service import get_remaining_installments, should_generate_next_batch
 from app.services.financial_defaults_service import get_all_effective_rates
 from app.services.pricing_service import compute_plan
+from app.services.storage_service import delete_file, enrich_photos, upload_file
+from app.utils.exceptions import StorageError
 from app.utils.logging import get_logger
 from app.schemas.financial_settings import ClientLotFinancialUpdate, rate_to_percent
 from app.schemas.lot import (
@@ -41,12 +44,106 @@ from app.schemas.lot import (
     LotUpdate,
     PaymentPlanPreviewRequest,
     PaymentPlanPreviewResponse,
+    PhotoUpdate,
 )
 
 router = APIRouter(prefix="/lots", tags=["Admin Lots"])
 
 logger = get_logger(__name__)
 dev_router = APIRouter(prefix="/developments", tags=["Admin Developments"])
+
+ALLOWED_PHOTO_TYPES = {"image/jpeg", "image/png", "image/jpg", "image/webp", "image/gif"}
+MAX_PHOTO_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+def _dev_response(dev: Development) -> dict:
+    """Serialize a development, enriching photos with fresh signed URLs."""
+    data = DevelopmentResponse.model_validate(dev).model_dump()
+    data["photos"] = enrich_photos(dev.photos or [])
+    return data
+
+
+def _lot_response(lot: Lot) -> dict:
+    """Serialize a lot, enriching photos with fresh signed URLs."""
+    data = LotResponse.model_validate(lot).model_dump()
+    data["photos"] = enrich_photos(lot.photos or [])
+    return data
+
+
+async def _add_photo(entity, *, company_id, subfolder: str, file: UploadFile,
+                     is_primary: bool, visible_to_client: bool, caption: Optional[str]) -> dict:
+    """Upload a photo file and append it to the entity's JSONB photos list."""
+    if file.content_type not in ALLOWED_PHOTO_TYPES:
+        raise HTTPException(status_code=400, detail="Tipo de imagem não permitido (use JPG, PNG, WEBP ou GIF)")
+    contents = await file.read()
+    if len(contents) > MAX_PHOTO_SIZE:
+        raise HTTPException(status_code=400, detail=f"Imagem excede o tamanho máximo de {MAX_PHOTO_SIZE // (1024*1024)} MB")
+    try:
+        path = await upload_file(
+            file_bytes=contents,
+            original_filename=file.filename or "photo.jpg",
+            company_id=str(company_id),
+            subfolder=subfolder,
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+    photos = list(entity.photos or [])
+    # First photo of an entity becomes primary automatically.
+    if is_primary or not photos:
+        for p in photos:
+            p["is_primary"] = False
+        is_primary = True
+    photo = {
+        "id": uuid4().hex,
+        "path": path,
+        "is_primary": is_primary,
+        "visible_to_client": visible_to_client,
+        "caption": caption,
+    }
+    photos.append(photo)
+    entity.photos = photos
+    flag_modified(entity, "photos")
+    return photo
+
+
+def _update_photo(entity, photo_id: str, data: PhotoUpdate) -> None:
+    """Mutate a single photo's flags/caption in the entity's photos list."""
+    photos = list(entity.photos or [])
+    target = next((p for p in photos if p.get("id") == photo_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    if data.is_primary is True:
+        for p in photos:
+            p["is_primary"] = False
+        target["is_primary"] = True
+    elif data.is_primary is False:
+        target["is_primary"] = False
+    if data.visible_to_client is not None:
+        target["visible_to_client"] = data.visible_to_client
+    if data.caption is not None:
+        target["caption"] = data.caption
+    entity.photos = photos
+    flag_modified(entity, "photos")
+
+
+async def _delete_photo(entity, photo_id: str) -> None:
+    """Remove a photo from the entity and delete its file from storage."""
+    photos = list(entity.photos or [])
+    target = next((p for p in photos if p.get("id") == photo_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    remaining = [p for p in photos if p.get("id") != photo_id]
+    # If we removed the primary photo, promote the first remaining one.
+    if target.get("is_primary") and remaining:
+        remaining[0]["is_primary"] = True
+    entity.photos = remaining
+    flag_modified(entity, "photos")
+    if target.get("path"):
+        try:
+            await delete_file(target["path"])
+        except StorageError:
+            pass  # File may already be gone
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +178,7 @@ async def list_developments(
 
     query = query.order_by(Development.created_at.desc())
     rows = await db.execute(query)
-    return [DevelopmentResponse.model_validate(d) for d in rows.scalars().all()]
+    return [_dev_response(d) for d in rows.scalars().all()]
 
 
 def _validate_development_data(data: DevelopmentCreate | DevelopmentUpdate, is_update: bool = False) -> None:
@@ -144,7 +241,7 @@ async def create_development(
     dev = Development(company_id=admin.company_id, **data.model_dump())
     db.add(dev)
     await db.flush()
-    return DevelopmentResponse.model_validate(dev)
+    return _dev_response(dev)
 
 
 @dev_router.get("/{dev_id}", response_model=DevelopmentResponse)
@@ -162,7 +259,7 @@ async def get_development(
     dev = result.scalar_one_or_none()
     if not dev:
         raise HTTPException(status_code=404, detail="Development not found")
-    return DevelopmentResponse.model_validate(dev)
+    return _dev_response(dev)
 
 
 @dev_router.put("/{dev_id}", response_model=DevelopmentResponse)
@@ -187,7 +284,65 @@ async def update_development(
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(dev, k, v)
     await db.flush()
-    return DevelopmentResponse.model_validate(dev)
+    return _dev_response(dev)
+
+
+async def _get_owned_development(db: AsyncSession, dev_id: UUID, company_id: UUID) -> Development:
+    dev = (await db.execute(
+        select(Development).where(Development.id == dev_id, Development.company_id == company_id)
+    )).scalar_one_or_none()
+    if not dev:
+        raise HTTPException(status_code=404, detail="Development not found")
+    return dev
+
+
+@dev_router.post("/{dev_id}/photos", response_model=DevelopmentResponse, status_code=status.HTTP_201_CREATED)
+async def add_development_photo(
+    dev_id: UUID,
+    file: UploadFile = File(...),
+    is_primary: bool = Form(False),
+    visible_to_client: bool = Form(False),
+    caption: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Upload a photo to a development gallery."""
+    dev = await _get_owned_development(db, dev_id, admin.company_id)
+    await _add_photo(
+        dev, company_id=admin.company_id, subfolder=f"developments/{dev_id}/photos",
+        file=file, is_primary=is_primary, visible_to_client=visible_to_client, caption=caption,
+    )
+    await db.flush()
+    return _dev_response(dev)
+
+
+@dev_router.patch("/{dev_id}/photos/{photo_id}", response_model=DevelopmentResponse)
+async def update_development_photo(
+    dev_id: UUID,
+    photo_id: str,
+    data: PhotoUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Toggle a development photo's primary flag / client visibility / caption."""
+    dev = await _get_owned_development(db, dev_id, admin.company_id)
+    _update_photo(dev, photo_id, data)
+    await db.flush()
+    return _dev_response(dev)
+
+
+@dev_router.delete("/{dev_id}/photos/{photo_id}", response_model=DevelopmentResponse)
+async def delete_development_photo(
+    dev_id: UUID,
+    photo_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Remove a photo from a development gallery."""
+    dev = await _get_owned_development(db, dev_id, admin.company_id)
+    await _delete_photo(dev, photo_id)
+    await db.flush()
+    return _dev_response(dev)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +370,7 @@ async def list_lots(
     rows = await db.execute(
         base.order_by(Lot.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
     )
-    items = [LotResponse.model_validate(r) for r in rows.scalars().all()]
+    items = [_lot_response(r) for r in rows.scalars().all()]
 
     return PaginatedResponse[LotResponse](
         items=items, total=total, page=page, per_page=per_page,
@@ -243,7 +398,7 @@ async def create_lot(
     lot = Lot(company_id=admin.company_id, **data.model_dump())
     db.add(lot)
     await db.flush()
-    return LotResponse.model_validate(lot)
+    return _lot_response(lot)
 
 
 @router.get("/{lot_id}", response_model=LotResponse)
@@ -259,7 +414,7 @@ async def get_lot(
     lot = result.scalar_one_or_none()
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
-    return LotResponse.model_validate(lot)
+    return _lot_response(lot)
 
 
 @router.put("/{lot_id}", response_model=LotResponse)
@@ -282,7 +437,65 @@ async def update_lot(
             v = LotStatus(v)
         setattr(lot, k, v)
     await db.flush()
-    return LotResponse.model_validate(lot)
+    return _lot_response(lot)
+
+
+async def _get_owned_lot(db: AsyncSession, lot_id: UUID, company_id: UUID) -> Lot:
+    lot = (await db.execute(
+        select(Lot).where(Lot.id == lot_id, Lot.company_id == company_id)
+    )).scalar_one_or_none()
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    return lot
+
+
+@router.post("/{lot_id}/photos", response_model=LotResponse, status_code=status.HTTP_201_CREATED)
+async def add_lot_photo(
+    lot_id: UUID,
+    file: UploadFile = File(...),
+    is_primary: bool = Form(False),
+    visible_to_client: bool = Form(False),
+    caption: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Upload a photo to a lot gallery."""
+    lot = await _get_owned_lot(db, lot_id, admin.company_id)
+    await _add_photo(
+        lot, company_id=admin.company_id, subfolder=f"lots/{lot_id}/photos",
+        file=file, is_primary=is_primary, visible_to_client=visible_to_client, caption=caption,
+    )
+    await db.flush()
+    return _lot_response(lot)
+
+
+@router.patch("/{lot_id}/photos/{photo_id}", response_model=LotResponse)
+async def update_lot_photo(
+    lot_id: UUID,
+    photo_id: str,
+    data: PhotoUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Toggle a lot photo's primary flag / client visibility / caption."""
+    lot = await _get_owned_lot(db, lot_id, admin.company_id)
+    _update_photo(lot, photo_id, data)
+    await db.flush()
+    return _lot_response(lot)
+
+
+@router.delete("/{lot_id}/photos/{photo_id}", response_model=LotResponse)
+async def delete_lot_photo(
+    lot_id: UUID,
+    photo_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Remove a photo from a lot gallery."""
+    lot = await _get_owned_lot(db, lot_id, admin.company_id)
+    await _delete_photo(lot, photo_id)
+    await db.flush()
+    return _lot_response(lot)
 
 
 @router.post("/assign", response_model=ClientLotResponse, status_code=status.HTTP_201_CREATED)
@@ -489,6 +702,60 @@ async def preview_assign(
         first_due=first_due,
         effective_rates=effective,
     )
+
+
+@router.delete("/assign/{client_lot_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unassign_lot(
+    client_lot_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Unassign a lot from a client (desvincular).
+
+    Only allowed while no installment has been paid: deletes the client_lot and
+    its (pending) invoices and frees the lot back to AVAILABLE. If any invoice is
+    already PAID, the assignment is kept to preserve financial history.
+    """
+    cid = admin.company_id
+
+    cl = (await db.execute(
+        select(ClientLot).where(ClientLot.id == client_lot_id, ClientLot.company_id == cid)
+    )).scalar_one_or_none()
+    if not cl:
+        raise HTTPException(status_code=404, detail="Vínculo (client_lot) não encontrado")
+
+    invoices = (await db.execute(
+        select(Invoice).where(Invoice.client_lot_id == cl.id)
+    )).scalars().all()
+
+    if any(inv.status == InvoiceStatus.PAID for inv in invoices):
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível desvincular: já existem parcelas pagas neste contrato.",
+        )
+
+    for inv in invoices:
+        await db.delete(inv)
+
+    # Free the lot back to AVAILABLE
+    lot = (await db.execute(
+        select(Lot).where(Lot.id == cl.lot_id, Lot.company_id == cid)
+    )).scalar_one_or_none()
+    if lot:
+        lot.status = LotStatus.AVAILABLE
+
+    await db.delete(cl)
+    await db.flush()
+
+    await log_audit(
+        db, user_id=admin.id, company_id=cid,
+        table_name="client_lots", operation="DELETE",
+        resource_id=str(client_lot_id),
+        detail=f"Lote desvinculado do cliente {cl.client_id}. {len(invoices)} faturas removidas.",
+        ip_address=request.client.host if request.client else None,
+    )
+    return None
 
 
 @router.get("/client-lots/{client_lot_id}", response_model=ClientLotResponse)

@@ -97,6 +97,33 @@ async def delete_file(storage_path: str) -> None:
         raise StorageError(f"Delete failed: {exc}") from exc
 
 
+def enrich_photos(photos: list | None, only_visible: bool = False) -> list[dict]:
+    """Return gallery photos with a fresh signed ``url`` for each item.
+
+    Photos are stored as ``{id, path, is_primary, visible_to_client, caption}``.
+    Signed URLs expire, so they are generated on read rather than persisted.
+    The primary photo (if any) is sorted first.
+
+    Args:
+        photos: the raw JSONB list stored on the development/lot.
+        only_visible: when True, drop photos not marked ``visible_to_client``
+            (used for client-portal responses).
+    """
+    out: list[dict] = []
+    for p in photos or []:
+        if only_visible and not p.get("visible_to_client"):
+            continue
+        item = dict(p)
+        path = p.get("path")
+        try:
+            item["url"] = get_public_url(path) if path else None
+        except Exception:
+            item["url"] = None
+        out.append(item)
+    out.sort(key=lambda x: (not x.get("is_primary", False)))
+    return out
+
+
 async def list_files(company_id: str, subfolder: str = "documents") -> list[dict]:
     """List files in a company's subfolder."""
     prefix = f"companies/{company_id}/{subfolder}"

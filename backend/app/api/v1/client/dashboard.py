@@ -12,11 +12,14 @@ from app.core.database import get_db
 from app.core.deps import get_client_user
 from app.models.client import Client
 from app.models.client_lot import ClientLot
+from app.models.development import Development
 from app.models.enums import InvoiceStatus
 from app.models.invoice import Invoice
+from app.models.lot import Lot
 from app.models.user import Profile
 from app.schemas.dashboard import ClientSummary, RecentActivity
 from app.schemas.lot import ClientLotResponse
+from app.services.storage_service import enrich_photos
 
 router = APIRouter(prefix="/dashboard", tags=["Client Dashboard"])
 
@@ -89,7 +92,33 @@ async def my_lots(
     rows = await db.execute(
         select(ClientLot).where(ClientLot.client_id == client.id)
     )
-    return [ClientLotResponse.model_validate(r) for r in rows.scalars().all()]
+    client_lots = rows.scalars().all()
+
+    # Preload lots + developments to attach the photos the admin exposed.
+    lot_ids = [cl.lot_id for cl in client_lots]
+    lots_by_id: dict = {}
+    devs_by_id: dict = {}
+    if lot_ids:
+        lot_rows = await db.execute(select(Lot).where(Lot.id.in_(lot_ids)))
+        lots_by_id = {lot.id: lot for lot in lot_rows.scalars().all()}
+        dev_ids = {lot.development_id for lot in lots_by_id.values()}
+        if dev_ids:
+            dev_rows = await db.execute(select(Development).where(Development.id.in_(dev_ids)))
+            devs_by_id = {dev.id: dev for dev in dev_rows.scalars().all()}
+
+    result = []
+    for cl in client_lots:
+        data = ClientLotResponse.model_validate(cl).model_dump()
+        lot = lots_by_id.get(cl.lot_id)
+        if lot:
+            dev = devs_by_id.get(lot.development_id)
+            data["lot_number"] = lot.lot_number
+            data["block"] = lot.block
+            data["development_name"] = dev.name if dev else None
+            data["lot_photos"] = enrich_photos(lot.photos or [], only_visible=True)
+            data["development_photos"] = enrich_photos(dev.photos or [], only_visible=True) if dev else []
+        result.append(data)
+    return result
 
 
 @router.get("/recent-activity", response_model=list[RecentActivity])

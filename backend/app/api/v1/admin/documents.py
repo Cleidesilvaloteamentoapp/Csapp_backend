@@ -163,6 +163,9 @@ async def update_document(
         cleaned = [str(t).strip() for t in body.tags if str(t).strip()][:20]
         doc.tags = cleaned
         changes.append(f"tags={cleaned}")
+    if body.visible_to_client is not None:
+        doc.visible_to_client = body.visible_to_client
+        changes.append(f"visible_to_client={body.visible_to_client}")
 
     if not changes:
         return _enrich(doc)

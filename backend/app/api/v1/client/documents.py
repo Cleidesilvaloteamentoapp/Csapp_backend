@@ -57,6 +57,9 @@ async def list_documents(
     query = select(ClientDocument).where(
         ClientDocument.client_id == client.id,
         ClientDocument.company_id == user.company_id,
+        # Only documents the admin chose to expose (client's own uploads are
+        # stored with visible_to_client=True so they remain visible to them).
+        ClientDocument.visible_to_client.is_(True),
     )
     if document_type:
         query = query.where(ClientDocument.document_type == document_type)
@@ -114,6 +117,7 @@ async def upload_document(
         file_path=file_path,
         file_size=len(contents),
         description=description,
+        visible_to_client=True,  # the client uploaded it, so they keep seeing it
         status=DocumentStatus.PENDING_REVIEW,
     )
     db.add(doc)
@@ -136,6 +140,7 @@ async def get_document(
             ClientDocument.id == document_id,
             ClientDocument.client_id == client.id,
             ClientDocument.company_id == user.company_id,
+            ClientDocument.visible_to_client.is_(True),
         )
     )
     doc = row.scalar_one_or_none()
@@ -159,6 +164,7 @@ async def download_document(
             ClientDocument.id == document_id,
             ClientDocument.client_id == client.id,
             ClientDocument.company_id == user.company_id,
+            ClientDocument.visible_to_client.is_(True),
         )
     )
     doc = row.scalar_one_or_none()
@@ -188,6 +194,7 @@ async def delete_document(
             ClientDocument.id == document_id,
             ClientDocument.client_id == client.id,
             ClientDocument.company_id == user.company_id,
+            ClientDocument.visible_to_client.is_(True),
         )
     )
     doc = row.scalar_one_or_none()

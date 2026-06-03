@@ -203,6 +203,9 @@ async def upload_client_document(
     tags: Optional[str] = Form(
         default=None, description="JSON array of tag strings, e.g. '[\"urgente\"]'"
     ),
+    visible_to_client: bool = Form(
+        default=False, description="Expor o documento ao cliente no portal"
+    ),
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("manage_documents")),
 ):
@@ -250,6 +253,7 @@ async def upload_client_document(
         file_size=len(contents),
         description=description,
         tags=parsed_tags,
+        visible_to_client=visible_to_client,
         status=DocumentStatus.PENDING_REVIEW,
     )
     db.add(doc)

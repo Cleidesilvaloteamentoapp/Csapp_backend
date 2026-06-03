@@ -13,6 +13,29 @@ from app.schemas.financial_settings import rate_from_percent, rate_to_percent
 
 
 # ---------------------------------------------------------------------------
+# Photos (shared by Development and Lot galleries)
+# ---------------------------------------------------------------------------
+
+class PhotoOut(BaseModel):
+    """A single photo in a development/lot gallery (enriched with a signed URL)."""
+
+    id: str
+    path: Optional[str] = None
+    url: Optional[str] = None
+    is_primary: bool = False
+    visible_to_client: bool = False
+    caption: Optional[str] = None
+
+
+class PhotoUpdate(BaseModel):
+    """Toggle a photo's primary flag / client visibility / caption."""
+
+    is_primary: Optional[bool] = None
+    visible_to_client: Optional[bool] = None
+    caption: Optional[str] = Field(None, max_length=255)
+
+
+# ---------------------------------------------------------------------------
 # Development
 # ---------------------------------------------------------------------------
 
@@ -78,6 +101,7 @@ class DevelopmentResponse(BaseModel):
     location: Optional[str] = None
     property_type: PropertyType
     documents: Optional[Dict[str, Any]] = None
+    photos: list[PhotoOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -148,6 +172,7 @@ class LotResponse(BaseModel):
     price: Decimal
     status: str
     documents: Optional[Dict[str, Any]] = None
+    photos: list[PhotoOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -222,6 +247,14 @@ class ClientLotResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+    # Optional property context, populated by the client portal (my-lots).
+    # Defaults keep admin endpoints (which validate a bare ClientLot) unaffected.
+    lot_number: Optional[str] = None
+    block: Optional[str] = None
+    development_name: Optional[str] = None
+    lot_photos: list[PhotoOut] = Field(default_factory=list)
+    development_photos: list[PhotoOut] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 

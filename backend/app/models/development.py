@@ -26,6 +26,8 @@ class Development(Base, TenantMixin, TimestampMixin):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     documents: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
+    # Photo gallery: list of {id, path, is_primary, visible_to_client, caption}
+    photos: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
 
     # Property type (required)
     property_type: Mapped[PropertyType] = mapped_column(

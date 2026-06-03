@@ -5,7 +5,7 @@ from typing import Optional
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -41,6 +41,9 @@ class ClientDocument(Base, TenantMixin, TimestampMixin):
         index=True,
     )
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    visible_to_client: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false", index=True
+    )
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, default=list, server_default="{}"
     )

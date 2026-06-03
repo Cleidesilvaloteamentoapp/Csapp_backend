@@ -28,6 +28,7 @@ class ClientDocumentResponse(BaseModel):
     tags: list[str] = Field(default_factory=list)
     status: str
     rejection_reason: Optional[str] = None
+    visible_to_client: bool = False
     reviewed_at: Optional[datetime] = None
     reviewed_by: Optional[UUID] = None
     created_at: datetime
@@ -50,6 +51,7 @@ class ClientDocumentUpdate(BaseModel):
     document_type: Optional[str] = Field(default=None, pattern=DOCUMENT_TYPE_PATTERN)
     description: Optional[str] = Field(default=None, max_length=500)
     tags: Optional[list[str]] = Field(default=None, max_length=20)
+    visible_to_client: Optional[bool] = Field(default=None)
 
 
 class DocumentReviewRequest(BaseModel):
