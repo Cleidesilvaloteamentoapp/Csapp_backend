@@ -331,6 +331,46 @@ async def update_development_photo(
     return _dev_response(dev)
 
 
+@dev_router.delete("/{dev_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_development(
+    dev_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Delete a development and all its lots.
+
+    Blocked if any lot in this development is SOLD (has an active contract).
+    """
+    dev = await _get_owned_development(db, dev_id, admin.company_id)
+
+    # Check for SOLD lots — those have active contracts and cannot be removed
+    sold = (await db.execute(
+        select(Lot).where(
+            Lot.development_id == dev_id,
+            Lot.status == LotStatus.SOLD,
+            Lot.company_id == admin.company_id,
+        )
+    )).scalars().first()
+    if sold:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível excluir: o empreendimento possui lote(s) vendido(s) com contrato ativo.",
+        )
+
+    await log_audit(
+        db, user_id=admin.id, company_id=admin.company_id,
+        table_name="developments", operation="DELETE",
+        resource_id=str(dev_id),
+        detail=f"Empreendimento '{dev.name}' excluído.",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    await db.delete(dev)
+    await db.flush()
+    return None
+
+
 @dev_router.delete("/{dev_id}/photos/{photo_id}", response_model=DevelopmentResponse)
 async def delete_development_photo(
     dev_id: UUID,
@@ -496,6 +536,38 @@ async def delete_lot_photo(
     await _delete_photo(lot, photo_id)
     await db.flush()
     return _lot_response(lot)
+
+
+@router.delete("/{lot_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_lot(
+    lot_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Delete a lot.
+
+    Blocked if the lot is SOLD (active contract exists).
+    """
+    lot = await _get_owned_lot(db, lot_id, admin.company_id)
+
+    if lot.status == LotStatus.SOLD:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível excluir um lote vendido com contrato ativo.",
+        )
+
+    await log_audit(
+        db, user_id=admin.id, company_id=admin.company_id,
+        table_name="lots", operation="DELETE",
+        resource_id=str(lot_id),
+        detail=f"Lote {lot.lot_number} (quadra {lot.block}) excluído.",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    await db.delete(lot)
+    await db.flush()
+    return None
 
 
 @router.post("/assign", response_model=ClientLotResponse, status_code=status.HTTP_201_CREATED)
