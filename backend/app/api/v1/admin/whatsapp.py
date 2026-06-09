@@ -43,7 +43,7 @@ router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 # Credential CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("/credentials/", response_model=list[WhatsAppCredentialResponse])
+@router.get("/credentials", response_model=list[WhatsAppCredentialResponse])
 async def list_credentials(
     db: AsyncSession = Depends(get_db),
     current_user: Profile = Depends(require_permission("manage_whatsapp")),
@@ -53,7 +53,7 @@ async def list_credentials(
 
 
 @router.post(
-    "/credentials/",
+    "/credentials",
     response_model=WhatsAppCredentialResponse,
     status_code=status.HTTP_201_CREATED,
 )
