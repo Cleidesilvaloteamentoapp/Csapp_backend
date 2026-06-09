@@ -28,8 +28,10 @@ from app.schemas.whatsapp import (
     WhatsAppTemplateResponse,
     WhatsAppTestMessage,
 )
+from app.schemas.notification_settings import NotificationSettingsResponse, NotificationSettingsUpdate
 from app.services import whatsapp_credential_service as cred_svc
 from app.services.whatsapp_credential_service import get_provider_by_credential
+from app.services import notification_settings_service as notif_settings_svc
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -392,3 +394,32 @@ async def delete_template(
         raise
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Notification Settings
+# ---------------------------------------------------------------------------
+
+@router.get("/notification-settings", response_model=NotificationSettingsResponse)
+async def get_notification_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
+):
+    """Get (or create with defaults) the notification preferences for the company."""
+    settings = await notif_settings_svc.get_or_create(db, current_user.company_id)
+    await db.commit()
+    return settings
+
+
+@router.put("/notification-settings", response_model=NotificationSettingsResponse)
+async def update_notification_settings(
+    payload: NotificationSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Profile = Depends(require_permission("manage_whatsapp")),
+):
+    """Update notification preferences for the company."""
+    update_data = payload.model_dump(exclude_unset=True)
+    settings = await notif_settings_svc.update(db, current_user.company_id, **update_data)
+    await db.commit()
+    await db.refresh(settings)
+    return settings

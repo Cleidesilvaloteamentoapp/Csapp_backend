@@ -31,6 +31,8 @@ from app.schemas.boleto import (
     BoletoUpdateRequest,
     ManualWriteoffRequest,
 )
+from app.services.admin_notify_service import notify_admins
+from app.models.enums import NotificationType
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -331,10 +333,22 @@ async def delete_boleto(
     if not boleto:
         raise HTTPException(status_code=404, detail="Boleto not found")
     
+    nosso_numero = boleto.nosso_numero
+    company_id = boleto.company_id
     boleto.status = BoletoStatus.CANCELADO
     await db.commit()
-    
-    logger.info(f"Boleto {boleto.nosso_numero} cancelled by admin {admin.id}")
+
+    logger.info(f"Boleto {nosso_numero} cancelled by admin {admin.id}")
+
+    await notify_admins(
+        db,
+        company_id,
+        "notify_admin_boleto_cancelled",
+        title="Boleto cancelado",
+        message=f"Boleto {nosso_numero} foi cancelado pelo admin.",
+        n_type=NotificationType.BOLETO_CANCELADO,
+        data={"nosso_numero": nosso_numero},
+    )
 
 
 # ---------------------------------------------------------------------------

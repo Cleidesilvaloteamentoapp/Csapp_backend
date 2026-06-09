@@ -25,6 +25,16 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+async def _fire_admin_notify(db, company_id, key, title, message, n_type, data=None):
+    """Deferred import to avoid circular imports at module load."""
+    try:
+        from app.services.admin_notify_service import notify_admins
+        from app.models.enums import NotificationType as NT
+        await notify_admins(db, company_id, key, title=title, message=message, n_type=n_type, data=data or {})
+    except Exception as exc:
+        logger.warning("client_admin_notify_failed", error=str(exc))
+
+
 async def list_clients(
     db: AsyncSession,
     company_id: UUID,
@@ -144,6 +154,16 @@ async def create_client(
                 detail="Dado duplicado. Verifique se o cliente já existe."
             )
     logger.info("client_created", client_id=str(client.id), company_id=str(company_id))
+
+    from app.models.enums import NotificationType
+    await _fire_admin_notify(
+        db, company_id, "notify_admin_client_created",
+        title="Novo cliente cadastrado",
+        message=f"Cliente {client.full_name} foi cadastrado no sistema.",
+        n_type=NotificationType.CLIENTE_CADASTRADO,
+        data={"client_id": str(client.id), "name": client.full_name},
+    )
+
     return client
 
 
@@ -210,4 +230,14 @@ async def deactivate_client(db: AsyncSession, company_id: UUID, client_id: UUID)
         client_id=str(client_id),
         lots_released=len(active_lots),
     )
+
+    from app.models.enums import NotificationType
+    await _fire_admin_notify(
+        db, company_id, "notify_admin_client_deleted",
+        title="Cliente excluído",
+        message=f"Cliente {client.full_name} foi desativado. {len(active_lots)} lote(s) liberado(s).",
+        n_type=NotificationType.CLIENTE_EXCLUIDO,
+        data={"client_id": str(client_id), "name": client.full_name, "lots_released": len(active_lots)},
+    )
+
     return client

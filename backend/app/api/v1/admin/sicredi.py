@@ -13,13 +13,16 @@ Provides full boleto lifecycle management:
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_company_admin, require_permission
 from app.models.user import Profile
 from app.models.client import Client
 from app.models.boleto import Boleto
-from app.models.enums import ClientStatus, BoletoStatus, InvoiceStatus, WriteoffType, BoletoTag
+from app.models.enums import ClientStatus, BoletoStatus, InvoiceStatus, NotificationType, WriteoffType, BoletoTag
 from app.models.invoice import Invoice
+from app.services.admin_notify_service import notify_admins
+from app.services.notification_settings_service import get_or_create as get_notif_settings
 from sqlalchemy import select
 from datetime import date as dt_date, datetime, timezone
 from app.schemas.sicredi import (
@@ -279,6 +282,52 @@ async def criar_boleto(
     await db.refresh(boleto_record)
     
     logger.info(f"Boleto {boleto_record.nosso_numero} created and persisted for client {client_record.id}")
+
+    # Notify client (WhatsApp + in-app) and admin
+    try:
+        notif_settings = await get_notif_settings(db, admin.company_id)
+        portal_url = f"{settings.FRONTEND_URL}/cliente/boletos"
+
+        if notif_settings.notify_client_new_boleto and client_record.phone:
+            from app.services.whatsapp_service import notify_new_boleto
+            await notify_new_boleto(
+                to=client_record.phone,
+                name=client_record.full_name,
+                due_date=payload.data_vencimento.isoformat(),
+                amount=str(payload.valor),
+                linha_digitavel=result.linhaDigitavel or "",
+                portal_url=portal_url,
+                db=db,
+                company_id=admin.company_id,
+            )
+
+        if notif_settings.notify_client_new_boleto and client_record.profile_id:
+            from app.services.notification_service import notify_boleto_emitido
+            from app.models.user import Profile as _Profile
+            profile = (await db.execute(
+                select(_Profile).where(_Profile.id == client_record.profile_id)
+            )).scalar_one_or_none()
+            if profile:
+                await notify_boleto_emitido(
+                    db,
+                    company_id=admin.company_id,
+                    user_id=profile.id,
+                    nosso_numero=boleto_record.nosso_numero or "",
+                    valor=str(payload.valor),
+                    data_vencimento=payload.data_vencimento.isoformat(),
+                )
+
+        await notify_admins(
+            db,
+            admin.company_id,
+            "notify_admin_boleto_generated",
+            title="Novo boleto gerado",
+            message=f"Boleto {boleto_record.nosso_numero} gerado para {client_record.full_name} | R$ {payload.valor} | Venc. {payload.data_vencimento}.",
+            n_type=NotificationType.BOLETO_EMITIDO,
+            data={"nosso_numero": boleto_record.nosso_numero, "client_id": str(client_record.id)},
+        )
+    except Exception as exc:
+        logger.warning("boleto_notification_failed", nosso_numero=boleto_record.nosso_numero, error=str(exc))
 
     return CriarBoletoAPIResponse(
         boleto_id=boleto_record.id,

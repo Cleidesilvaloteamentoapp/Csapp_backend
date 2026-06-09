@@ -98,6 +98,8 @@ async def _notify_service_order_update_async(
     from app.models.client import Client
     from app.models.service import ServiceOrder
     from app.services.email_service import send_service_order_update
+    from app.services.notification_settings_service import get_or_create as get_notif_settings
+    from app.services.whatsapp_service import notify_service_order
 
     async with session_factory() as db:
         row = await db.execute(
@@ -117,6 +119,20 @@ async def _notify_service_order_update_async(
             order_id=order_id,
             new_status=new_status,
         )
+
+        # WhatsApp to client if enabled
+        try:
+            ns = await get_notif_settings(db, client.company_id)
+            if ns.notify_client_service and client.phone:
+                await notify_service_order(
+                    to=client.phone,
+                    name=client.full_name,
+                    status=new_status,
+                    db=db,
+                    company_id=client.company_id,
+                )
+        except Exception as exc:
+            logger.warning("service_order_whatsapp_failed", order_id=order_id, error=str(exc))
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -142,6 +158,7 @@ async def _send_whatsapp_reminders_async(session_factory: TaskSessionFactory):
     from app.models.client_lot import ClientLot
     from app.models.enums import InvoiceStatus
     from app.models.invoice import Invoice
+    from app.services.notification_settings_service import get_or_create as get_notif_settings
     from app.services.whatsapp_service import (
         notify_invoice_due,
         notify_invoice_overdue,
@@ -150,6 +167,15 @@ async def _send_whatsapp_reminders_async(session_factory: TaskSessionFactory):
     today = date.today()
     reminder_7d = today + timedelta(days=7)
     overdue_1d = today - timedelta(days=1)
+
+    # Cache settings per company to avoid repeated DB lookups
+    _settings_cache: dict = {}
+
+    async def _get_settings(db, company_id):
+        key = str(company_id)
+        if key not in _settings_cache:
+            _settings_cache[key] = await get_notif_settings(db, company_id)
+        return _settings_cache[key]
 
     async with session_factory() as db:
         # 7-day WhatsApp reminders
@@ -167,6 +193,9 @@ async def _send_whatsapp_reminders_async(session_factory: TaskSessionFactory):
             if not client.phone:
                 continue
             try:
+                ns = await _get_settings(db, client.company_id)
+                if not ns.notify_client_due_reminder:
+                    continue
                 await notify_invoice_due(
                     to=client.phone,
                     name=client.full_name,
@@ -193,6 +222,9 @@ async def _send_whatsapp_reminders_async(session_factory: TaskSessionFactory):
             if not client.phone:
                 continue
             try:
+                ns = await _get_settings(db, client.company_id)
+                if not ns.notify_client_due_reminder:
+                    continue
                 await notify_invoice_due(
                     to=client.phone,
                     name=client.full_name,
@@ -219,6 +251,9 @@ async def _send_whatsapp_reminders_async(session_factory: TaskSessionFactory):
             if not client.phone:
                 continue
             try:
+                ns = await _get_settings(db, client.company_id)
+                if not ns.notify_client_overdue:
+                    continue
                 await notify_invoice_overdue(
                     to=client.phone,
                     name=client.full_name,
@@ -438,8 +473,9 @@ async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
     from app.models.boleto import Boleto
     from app.models.client_lot import ClientLot
     from app.models.cycle_approval import CycleApproval
-    from app.models.enums import BoletoStatus, ClientLotStatus, CycleApprovalStatus, InvoiceStatus
+    from app.models.enums import BoletoStatus, ClientLotStatus, CycleApprovalStatus, InvoiceStatus, NotificationType
     from app.models.invoice import Invoice
+    from app.services.admin_notify_service import notify_admins
     from app.services.email_service import send_admin_alert
 
     async with session_factory() as db:
@@ -498,17 +534,30 @@ async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
             db.add(approval)
             created += 1
 
-            # Send admin alert
+            # Send admin alert (email + in-app + WhatsApp)
+            alert_msg = (
+                f"O ciclo {cl.current_cycle} do contrato (lote ID: {cl.id}) foi concluído. "
+                f"Uma solicitação de aprovação para o ciclo {next_cycle} foi criada. "
+                f"Valor atual da parcela: R${cl.current_installment_value}."
+            )
             try:
                 await send_admin_alert(
                     company_id=str(cl.company_id),
                     subject=f"Ciclo {cl.current_cycle} concluído — aprovação pendente",
-                    message=(
-                        f"O ciclo {cl.current_cycle} do contrato (lote ID: {cl.id}) foi concluído. "
-                        f"Uma solicitação de aprovação para o ciclo {next_cycle} foi criada. "
-                        f"Valor atual da parcela: R${cl.current_installment_value}."
-                    ),
+                    message=alert_msg,
                     db=db,
+                )
+            except Exception as exc:
+                logger.warning("cycle_email_alert_failed", cl_id=str(cl.id), error=str(exc))
+            try:
+                await notify_admins(
+                    db,
+                    cl.company_id,
+                    "notify_admin_cycle_request",
+                    title=f"Ciclo {cl.current_cycle} concluído",
+                    message=alert_msg,
+                    n_type=NotificationType.CICLO_PENDENTE,
+                    data={"client_lot_id": str(cl.id), "cycle_number": next_cycle},
                 )
             except Exception as exc:
                 logger.warning("cycle_completion_alert_failed", cl_id=str(cl.id), error=str(exc))
