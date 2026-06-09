@@ -166,6 +166,27 @@ async def sicredi_webhook(
             invoice_id=str(invoice.id) if invoice else None,
         )
 
+    # Process baixa / cancelamento events so boletos written-off at the bank stop
+    # showing as "em aberto" locally.
+    movimento_upper = movimento.upper() if movimento else ""
+    if any(k in movimento_upper for k in ("BAIXA", "CANCELAMENTO", "CANCELADO")):
+        if boleto and boleto.status not in (BoletoStatus.CANCELADO, BoletoStatus.LIQUIDADO):
+            boleto.status = BoletoStatus.CANCELADO
+            await db.flush()
+            logger.info(
+                "sicredi_webhook_boleto_baixado",
+                boleto_id=str(boleto.id),
+                nosso_numero=nosso_numero,
+                movimento=movimento,
+            )
+        await db.commit()
+        return WebhookEventResponse(
+            status="processed",
+            nosso_numero=nosso_numero,
+            movimento=movimento,
+            detail="Boleto baixado/cancelado sincronizado para CANCELADO.",
+        )
+
     logger.info("sicredi_webhook_unhandled_event", movimento=movimento)
     return WebhookEventResponse(
         status="ignored",

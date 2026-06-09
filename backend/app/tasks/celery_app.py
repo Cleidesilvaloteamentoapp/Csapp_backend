@@ -15,6 +15,7 @@ celery = Celery(
         "app.tasks.notification_tasks",
         "app.tasks.adjustment_tasks",
         "app.tasks.batch_tasks",
+        "app.tasks.sicredi_sync_tasks",
     ],
 )
 
@@ -65,5 +66,9 @@ celery.conf.beat_schedule = {
     "check-cycle-completions-daily": {
         "task": "app.tasks.notification_tasks.check_cycle_completions",
         "schedule": crontab(hour=4, minute=0),  # 04:00 daily
+    },
+    "sync-open-boletos": {
+        "task": "app.tasks.sicredi_sync_tasks.sync_open_boletos",
+        "schedule": crontab(hour="*/4", minute=15),  # every 4 hours
     },
 }

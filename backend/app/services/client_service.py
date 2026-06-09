@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
 from app.core.tenant import get_tenant_filter
 from app.models.client import Client
-from app.models.enums import ClientStatus, UserRole
+from app.models.client_lot import ClientLot
+from app.models.enums import ClientLotStatus, ClientStatus, LotStatus, UserRole
+from app.models.lot import Lot
 from app.models.user import Profile
 from app.schemas.client import ClientCreate, ClientUpdate, ClientResponse
 from app.schemas.common import PaginatedResponse, PaginationParams
@@ -170,9 +172,42 @@ async def update_client(
 
 
 async def deactivate_client(db: AsyncSession, company_id: UUID, client_id: UUID) -> Client:
-    """Soft-delete: set client status to inactive."""
+    """Soft-delete a client: mark inactive, release lots, drop portal account.
+
+    Releasing the lots (active ClientLot -> CANCELLED, Lot -> AVAILABLE) prevents
+    the lot from being stuck as SOLD/orphaned. Deleting the linked portal Profile
+    frees the unique email/CPF so the client can be re-registered later.
+    """
     client = await get_client(db, company_id, client_id)
     client.status = ClientStatus.INACTIVE
+
+    # Release any active contracts and free the underlying lots.
+    active_lots = (await db.execute(
+        select(ClientLot).where(
+            ClientLot.client_id == client_id,
+            ClientLot.status == ClientLotStatus.ACTIVE,
+        )
+    )).scalars().all()
+    for cl in active_lots:
+        cl.status = ClientLotStatus.CANCELLED
+        lot = (await db.execute(select(Lot).where(Lot.id == cl.lot_id))).scalar_one_or_none()
+        if lot is not None and lot.status != LotStatus.AVAILABLE:
+            lot.status = LotStatus.AVAILABLE
+
+    # Remove the portal account tied to this client (frees the unique email/CPF).
+    if client.profile_id is not None:
+        profile = (await db.execute(
+            select(Profile).where(Profile.id == client.profile_id)
+        )).scalar_one_or_none()
+        if profile is not None:
+            client.profile_id = None  # FK is SET NULL; clear before delete
+            await db.flush()
+            await db.delete(profile)
+
     await db.flush()
-    logger.info("client_deactivated", client_id=str(client_id))
+    logger.info(
+        "client_deactivated",
+        client_id=str(client_id),
+        lots_released=len(active_lots),
+    )
     return client

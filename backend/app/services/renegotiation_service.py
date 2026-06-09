@@ -2,6 +2,8 @@
 """Service for debt renegotiation workflows."""
 
 from datetime import date, datetime, timedelta, timezone
+
+from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -230,7 +232,8 @@ async def apply_renegotiation(
     existing_count = count_row.scalar() or 0
 
     for i in range(renego.new_installments):
-        due = renego.first_due_date + timedelta(days=30 * i)
+        # relativedelta preserves the day-of-month (timedelta(days=30*i) drifts).
+        due = renego.first_due_date + relativedelta(months=i)
         new_inv = Invoice(
             company_id=company_id,
             client_lot_id=renego.client_lot_id,

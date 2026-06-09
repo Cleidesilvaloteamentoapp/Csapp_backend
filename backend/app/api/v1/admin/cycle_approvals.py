@@ -2,6 +2,8 @@
 """Admin endpoints for managing cycle approval requests."""
 
 from datetime import datetime, timezone
+
+from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -214,7 +216,6 @@ async def approve_cycle(
     client_lot.last_cycle_paid_at = datetime.now(timezone.utc).date()
 
     # Generate next 12 invoices
-    from datetime import timedelta
 
     # Find last invoice due date
     last_inv_row = await db.execute(
@@ -227,7 +228,8 @@ async def approve_cycle(
         .limit(1)
     )
     last_inv = last_inv_row.scalar_one_or_none()
-    next_due = (last_inv.due_date + timedelta(days=30)) if last_inv else datetime.now(timezone.utc).date() + timedelta(days=30)
+    # relativedelta preserves the day-of-month across months (timedelta(days=30) drifts).
+    next_due = (last_inv.due_date + relativedelta(months=1)) if last_inv else datetime.now(timezone.utc).date() + relativedelta(months=1)
 
     # Count existing invoices for numbering
     count_row = await db.execute(
@@ -252,7 +254,7 @@ async def approve_cycle(
             status=InvoiceStatus.PENDING,
         )
         db.add(inv)
-        next_due = next_due + timedelta(days=30)
+        next_due = next_due + relativedelta(months=1)
 
     # Record event
     await record_event(

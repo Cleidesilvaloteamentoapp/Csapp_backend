@@ -59,6 +59,7 @@ class ClientResponse(BaseModel):
     address: Optional[Dict[str, Any]] = None
     documents: Optional[List[Any]] = None
     notes: Optional[str] = None
+    photo_url: Optional[str] = None
     status: str
     asaas_customer_id: Optional[str] = None
     created_by: Optional[UUID] = None
@@ -80,6 +81,7 @@ class ClientProfileResponse(BaseModel):
     contract_number: Optional[str] = None
     matricula: Optional[str] = None
     address: Optional[Dict[str, Any]] = None
+    photo_url: Optional[str] = None
     status: str
     created_at: datetime
 

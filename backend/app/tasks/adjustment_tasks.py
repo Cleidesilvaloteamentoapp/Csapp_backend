@@ -1,14 +1,26 @@
 
-"""Celery tasks for annual IPCA adjustment and admin alerts."""
+"""Celery tasks for index-based contract adjustment and admin alerts.
+
+Adjustments run per the contract's frequency (monthly / quarterly / semiannual /
+annual). Each cycle's installments must be fully paid before the next cycle's
+value is recalculated as index %% + fixed rate.
+"""
 
 from datetime import date, timedelta
 from decimal import Decimal
+
+from dateutil.relativedelta import relativedelta
 
 from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Installments per adjustment cycle, keyed by AdjustmentFrequency.value.
+_CYCLE_SIZE = {"MONTHLY": 1, "QUARTERLY": 3, "SEMIANNUAL": 6, "ANNUAL": 12}
+# Minimum months that must elapse between adjustments, keyed the same way.
+_MIN_MONTHS = {"MONTHLY": 1, "QUARTERLY": 3, "SEMIANNUAL": 6, "ANNUAL": 12}
 
 
 async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
@@ -31,12 +43,13 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
     today = date.today()
 
     async with session_factory() as db:
-        # Find active contracts that need adjustment (not adjusted this year)
-        one_year_ago = today - timedelta(days=365)
+        # Candidate contracts: never adjusted, or last adjusted at least a month
+        # ago (the loosest frequency). The exact interval is checked per contract.
+        one_month_ago = today - relativedelta(months=1)
         rows = await db.execute(
             select(ClientLot).where(
                 ClientLot.status == ClientLotStatus.ACTIVE,
-                ClientLot.last_adjustment_date.is_(None) | (ClientLot.last_adjustment_date <= one_year_ago),
+                ClientLot.last_adjustment_date.is_(None) | (ClientLot.last_adjustment_date <= one_month_ago),
             )
         )
         contracts = rows.scalars().all()
@@ -46,8 +59,22 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
         # Cache index values per (index_type, company_id) to avoid repeated API calls
         index_cache: dict[tuple, Decimal] = {}
 
+        from app.services.financial_defaults_service import (
+            get_effective_adjustment_index, get_effective_adjustment_frequency,
+            get_effective_custom_rate,
+        )
+
         for cl in contracts:
-            # Check if the last 12 invoices are all PAID (cycle lock)
+            # Resolve the contract's adjustment frequency and the matching cycle.
+            frequency = await get_effective_adjustment_frequency(db, cl)
+            cycle_size = _CYCLE_SIZE.get(frequency.value, 12)
+            min_months = _MIN_MONTHS.get(frequency.value, 12)
+
+            # Enforce the minimum interval for this specific frequency.
+            if cl.last_adjustment_date and cl.last_adjustment_date > today - relativedelta(months=min_months):
+                continue
+
+            # Cycle lock: the last `cycle_size` invoices must all be PAID.
             recent_invoices = await db.execute(
                 select(Invoice)
                 .where(
@@ -55,33 +82,32 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
                     Invoice.status != InvoiceStatus.CANCELLED,
                 )
                 .order_by(Invoice.installment_number.desc())
-                .limit(12)
+                .limit(cycle_size)
             )
             recent = list(recent_invoices.scalars().all())
 
-            if len(recent) < 12:
+            if len(recent) < cycle_size:
                 continue
             all_paid = all(inv.status == InvoiceStatus.PAID for inv in recent)
             if not all_paid:
                 continue
 
             # Determine which index to use (3-tier: per-lot → company → IPCA)
-            from app.services.financial_defaults_service import (
-                get_effective_adjustment_index, get_effective_custom_rate,
-            )
             index_type = await get_effective_adjustment_index(db, cl)
-            cache_key = (index_type, cl.company_id)
 
-            if cache_key not in index_cache:
-                index_pct = await get_accumulated_index(
-                    index_type,
-                    reference_date=today,
-                    db=db,
-                    company_id=cl.company_id,
-                )
-                index_cache[cache_key] = index_pct
-
-            index_pct = index_cache[cache_key]
+            # A per-contract manual index value (e.g. IPCA do dia) overrides the lookup.
+            if cl.manual_index_value is not None:
+                index_pct = Decimal(str(cl.manual_index_value))
+            else:
+                cache_key = (index_type, cl.company_id)
+                if cache_key not in index_cache:
+                    index_cache[cache_key] = await get_accumulated_index(
+                        index_type,
+                        reference_date=today,
+                        db=db,
+                        company_id=cl.company_id,
+                    )
+                index_pct = index_cache[cache_key]
 
             if index_pct <= 0:
                 skipped_no_index += 1
@@ -108,8 +134,10 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
                 client_lot_id=cl.id,
                 event_type=ContractEventType.ADJUSTMENT,
                 description=(
-                    f"Reajuste anual aplicado (ciclo {cl.current_cycle}). "
-                    f"Índice: {index_type.value} {index_pct}%, Taxa fixa: {fixed_rate_pct}%. "
+                    f"Reajuste {frequency.value.lower()} aplicado (ciclo {cl.current_cycle}). "
+                    f"Índice: {index_type.value} {index_pct}%"
+                    f"{' (manual)' if cl.manual_index_value is not None else ''}, "
+                    f"Taxa fixa: {fixed_rate_pct}%. "
                     f"Valor anterior: R${adj['original_value']}, "
                     f"Novo valor: R${adj['new_value']}"
                 ),
@@ -118,6 +146,8 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
                 new_value=str(adj["new_value"]),
                 metadata_json={
                     "index_type": index_type.value,
+                    "frequency": frequency.value,
+                    "manual_index": cl.manual_index_value is not None,
                     "index_pct": str(index_pct),
                     "fixed_rate_pct": str(fixed_rate_pct),
                     "index_adjustment": str(adj["index_adjustment"]),

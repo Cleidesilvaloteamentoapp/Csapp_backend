@@ -142,8 +142,9 @@ class SicrediClient:
                 expect_binary=expect_binary,
             )
 
-        # Success
-        if resp.status_code in (200, 201):
+        # Success — 202 Accepted is returned for async commands like baixa
+        # (statusComando=MOVIMENTO_ENVIADO) and must be treated as success.
+        if resp.status_code in (200, 201, 202):
             if expect_binary:
                 return resp.content
             try:

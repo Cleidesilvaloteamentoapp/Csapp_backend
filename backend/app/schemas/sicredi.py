@@ -10,7 +10,9 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.utils.documents import is_valid_cpf_cnpj
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +96,14 @@ class PagadorRequest(BaseModel):
     cep: str = Field(..., description="CEP with 8 digits")
     email: Optional[str] = None
     telefone: Optional[str] = None
+
+    @field_validator("documento")
+    @classmethod
+    def _validate_documento(cls, v: str) -> str:
+        # Reject invalid CPF/CNPJ up-front so Sicredi doesn't 400 mid-batch.
+        if not is_valid_cpf_cnpj(v):
+            raise ValueError("CPF/CNPJ do pagador inválido. Informe um documento válido.")
+        return v
 
 
 class BeneficiarioFinalRequest(BaseModel):

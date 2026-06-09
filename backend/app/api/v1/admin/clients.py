@@ -278,6 +278,50 @@ async def upload_client_document(
     return payload
 
 
+@router.post("/{client_id}/photo", response_model=ClientResponse)
+async def upload_client_photo(
+    client_id: UUID,
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_clients")),
+):
+    """Upload/replace the client's profile photo (central do cliente)."""
+    client = await client_service.get_client(db, admin.company_id, client_id)
+
+    try:
+        contents = await file.read()
+        path = await upload_file(
+            file_bytes=contents,
+            original_filename=file.filename or "photo",
+            company_id=str(admin.company_id),
+            subfolder=f"clients/{client_id}/photo",
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail) from exc
+
+    client.photo_url = path
+    await db.flush()
+
+    await log_audit(
+        db,
+        user_id=admin.id,
+        company_id=admin.company_id,
+        table_name="clients",
+        operation="UPDATE",
+        resource_id=str(client.id),
+        detail=f"Foto de perfil atualizada para {client.full_name}",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    payload = ClientResponse.model_validate(client).model_dump()
+    try:
+        payload["photo_url"] = get_public_url(path)
+    except Exception:
+        pass
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Portal access management
 # ---------------------------------------------------------------------------

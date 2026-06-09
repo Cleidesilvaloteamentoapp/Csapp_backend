@@ -79,7 +79,7 @@ async def request_service(
     )
     db.add(order)
     await db.flush()
-    return ServiceOrderResponse.model_validate(order)
+    return ServiceOrderResponse.from_order(order)
 
 
 @router.get("/orders", response_model=list[ServiceOrderResponse])
@@ -97,7 +97,7 @@ async def my_orders(
         .where(ServiceOrder.client_id == client.id, ServiceOrder.company_id == user.company_id)
         .order_by(ServiceOrder.created_at.desc())
     )
-    return [ServiceOrderResponse.model_validate(r) for r in rows.scalars().all()]
+    return [ServiceOrderResponse.from_order(r) for r in rows.scalars().all()]
 
 
 @router.get("/orders/{order_id}", response_model=ServiceOrderResponse)
@@ -121,4 +121,36 @@ async def get_order(
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Service order not found")
-    return ServiceOrderResponse.model_validate(order)
+    return ServiceOrderResponse.from_order(order)
+
+
+@router.patch("/orders/{order_id}/cancel", response_model=ServiceOrderResponse)
+async def cancel_order(
+    order_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: Profile = Depends(get_client_user),
+):
+    """Client cancels their own service request (only while not yet completed)."""
+    client = await _get_client(db, user)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client profile not found")
+
+    row = await db.execute(
+        select(ServiceOrder).where(
+            ServiceOrder.id == order_id,
+            ServiceOrder.client_id == client.id,
+            ServiceOrder.company_id == user.company_id,
+        )
+    )
+    order = row.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="Service order not found")
+    if order.status in (ServiceOrderStatus.COMPLETED, ServiceOrderStatus.CANCELLED):
+        raise HTTPException(
+            status_code=400,
+            detail="Esta solicitação não pode mais ser cancelada.",
+        )
+
+    order.status = ServiceOrderStatus.CANCELLED
+    await db.flush()
+    return ServiceOrderResponse.from_order(order)

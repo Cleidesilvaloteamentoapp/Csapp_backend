@@ -4,6 +4,8 @@ from typing import Optional
 
 import math
 from datetime import date, timedelta
+
+from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -474,7 +476,8 @@ async def update_lot(
 
     for k, v in data.model_dump(exclude_unset=True).items():
         if k == "status":
-            v = LotStatus(v)
+            # Enum values are uppercase; accept any case from the UI.
+            v = LotStatus(str(v).upper())
         setattr(lot, k, v)
     await db.flush()
     return _lot_response(lot)
@@ -547,11 +550,19 @@ async def delete_lot(
 ):
     """Delete a lot.
 
-    Blocked if the lot is SOLD (active contract exists).
+    Blocked only if an ACTIVE contract (client_lot) still references it. A lot
+    left as SOLD but orphaned (e.g. client deleted without unlinking) can be
+    deleted — the SOLD status alone must not lock it forever.
     """
     lot = await _get_owned_lot(db, lot_id, admin.company_id)
 
-    if lot.status == LotStatus.SOLD:
+    active_contract = (await db.execute(
+        select(ClientLot).where(
+            ClientLot.lot_id == lot_id,
+            ClientLot.status == ClientLotStatus.ACTIVE,
+        )
+    )).scalar_one_or_none()
+    if active_contract:
         raise HTTPException(
             status_code=400,
             detail="Não é possível excluir um lote vendido com contrato ativo.",
@@ -670,6 +681,7 @@ async def assign_lot(
         adjustment_index=adj_index_enum,
         adjustment_frequency=adj_freq_enum,
         adjustment_custom_rate=adj_custom_rate,
+        manual_index_value=data.manual_index_value,
         payment_plan=plan,
         status=ClientLotStatus.ACTIVE,
     )
@@ -686,7 +698,9 @@ async def assign_lot(
     first_cycle_count = min(num_installments, 12)
 
     for i in range(first_cycle_count):
-        due = first_due + timedelta(days=30 * i)
+        # Use relativedelta so the day-of-month is preserved across months
+        # (timedelta(days=30*i) drifts day 20 -> day 19 on 31-day months).
+        due = first_due + relativedelta(months=i)
         installment_number = i + 1
         # The final installment of the whole contract absorbs the rounding residue.
         amount = (

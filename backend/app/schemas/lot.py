@@ -156,7 +156,7 @@ class LotUpdate(BaseModel):
     block: Optional[str] = Field(None, max_length=50)
     area_m2: Optional[Decimal] = Field(None, gt=0)
     price: Optional[Decimal] = Field(None, gt=0)
-    status: Optional[str] = Field(None, pattern=r"^(available|reserved|sold)$")
+    status: Optional[str] = Field(None, pattern=r"(?i)^(available|reserved|sold)$")
     documents: Optional[Dict[str, Any]] = None
 
 
@@ -201,6 +201,7 @@ class LotAssignRequest(BaseModel):
     adjustment_index: Optional[str] = Field(None, pattern=r"^(IPCA|IGPM|CUB|INPC)$", description="Price index: IPCA, IGPM, CUB, INPC")
     adjustment_frequency: Optional[str] = Field(None, pattern=r"^(MONTHLY|QUARTERLY|SEMIANNUAL|ANNUAL)$", description="Adjustment frequency")
     adjustment_custom_rate: Optional[Decimal] = Field(None, description="Custom fixed rate on top of index in %, e.g. 5 = 5%")
+    manual_index_value: Optional[Decimal] = Field(None, description="Manual index value in %, e.g. IPCA do dia = 0.5 for 0.5%. Overrides the economic_indices lookup for this contract.")
     payment_plan: Optional[Dict[str, Any]] = Field(
         None,
         description="Installment details, e.g. {'installments': 120, 'first_due': '2024-03-01'}",
@@ -241,6 +242,7 @@ class ClientLotResponse(BaseModel):
     adjustment_index: Optional[str] = None
     adjustment_frequency: Optional[str] = None
     adjustment_custom_rate: Optional[Decimal] = None
+    manual_index_value: Optional[Decimal] = None
     previous_client_id: Optional[UUID] = None
     transfer_date: Optional[date] = None
     payment_plan: Optional[Dict[str, Any]] = None

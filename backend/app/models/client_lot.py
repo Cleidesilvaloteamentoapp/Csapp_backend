@@ -70,6 +70,11 @@ class ClientLot(Base, TenantMixin, TimestampMixin):
         Numeric(6, 4), nullable=True,
         comment="Custom fixed rate overriding default 5% annual"
     )
+    manual_index_value: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(8, 4), nullable=True,
+        comment="Manual index %% (e.g. IPCA do dia) for this contract, "
+                "overriding the economic_indices lookup at adjustment time"
+    )
     previous_client_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True,
         comment="Previous owner after a contract transfer"

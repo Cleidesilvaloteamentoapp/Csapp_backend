@@ -84,6 +84,41 @@ async def update_service_type(
     return ServiceTypeResponse.model_validate(st)
 
 
+@router.delete("/types/{type_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_service_type(
+    type_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_financial")),
+):
+    """Delete a service type.
+
+    Blocked if any service order references it (FK uses CASCADE; refuse to avoid
+    silently destroying order history). Soft-disable via is_active instead.
+    """
+    result = await db.execute(
+        select(ServiceType).where(
+            ServiceType.id == type_id, ServiceType.company_id == admin.company_id
+        )
+    )
+    st = result.scalar_one_or_none()
+    if not st:
+        raise HTTPException(status_code=404, detail="Service type not found")
+
+    in_use = (await db.execute(
+        select(func.count()).select_from(
+            select(ServiceOrder).where(ServiceOrder.service_type_id == type_id).subquery()
+        )
+    )).scalar() or 0
+    if in_use:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível excluir: existem solicitações usando este serviço. Desative-o.",
+        )
+
+    await db.delete(st)
+    await db.flush()
+
+
 # ---------------------------------------------------------------------------
 # Service Orders
 # ---------------------------------------------------------------------------
@@ -101,7 +136,8 @@ async def list_orders(
     """List service orders with filters."""
     base = select(ServiceOrder).where(ServiceOrder.company_id == admin.company_id)
     if status_filter:
-        base = base.where(ServiceOrder.status == status_filter)
+        # Stored enum values are uppercase; accept lowercase filters from the UI.
+        base = base.where(ServiceOrder.status == status_filter.upper())
     if client_id:
         base = base.where(ServiceOrder.client_id == client_id)
 
@@ -111,7 +147,7 @@ async def list_orders(
         .offset((page - 1) * per_page)
         .limit(per_page)
     )
-    items = [ServiceOrderResponse.model_validate(r) for r in rows.scalars().all()]
+    items = [ServiceOrderResponse.from_order(r) for r in rows.scalars().all()]
 
     return PaginatedResponse[ServiceOrderResponse](
         items=items, total=total, page=page, per_page=per_page,
@@ -134,7 +170,7 @@ async def get_order(
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="Service order not found")
-    return ServiceOrderResponse.model_validate(order)
+    return ServiceOrderResponse.from_order(order)
 
 
 @router.patch("/orders/{order_id}/status", response_model=ServiceOrderResponse)
@@ -154,11 +190,15 @@ async def update_order_status(
     if not order:
         raise HTTPException(status_code=404, detail="Service order not found")
 
-    order.status = ServiceOrderStatus(data.status)
+    # Stored enum values are uppercase; the schema validates lowercase input.
+    try:
+        order.status = ServiceOrderStatus(data.status.upper())
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid status: {data.status}")
     if data.status == "completed":
         order.execution_date = date.today()
     await db.flush()
-    return ServiceOrderResponse.model_validate(order)
+    return ServiceOrderResponse.from_order(order)
 
 
 @router.patch("/orders/{order_id}/financial", response_model=ServiceOrderResponse)
@@ -183,7 +223,7 @@ async def update_order_financial(
     if data.revenue is not None:
         order.revenue = data.revenue
     await db.flush()
-    return ServiceOrderResponse.model_validate(order)
+    return ServiceOrderResponse.from_order(order)
 
 
 @router.get("/analytics")

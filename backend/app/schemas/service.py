@@ -87,5 +87,22 @@ class ServiceOrderResponse(BaseModel):
     notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    # Requester / service info (populated via from_order)
+    client_name: Optional[str] = None
+    client_cpf_cnpj: Optional[str] = None
+    service_type_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @classmethod
+    def from_order(cls, order) -> "ServiceOrderResponse":
+        """Build the response including the requesting client and service type names."""
+        resp = cls.model_validate(order)
+        client = getattr(order, "client", None)
+        if client is not None:
+            resp.client_name = getattr(client, "full_name", None)
+            resp.client_cpf_cnpj = getattr(client, "cpf_cnpj", None)
+        service_type = getattr(order, "service_type", None)
+        if service_type is not None:
+            resp.service_type_name = getattr(service_type, "name", None)
+        return resp

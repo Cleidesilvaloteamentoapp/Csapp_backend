@@ -34,6 +34,7 @@ class Client(Base, TenantMixin, TimestampMixin):
     address: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     documents: Mapped[Optional[list]] = mapped_column(JSONB, default=list)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    photo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[ClientStatus] = mapped_column(
         SAEnum(ClientStatus, name="client_status", create_constraint=False),
         default=ClientStatus.ACTIVE,
