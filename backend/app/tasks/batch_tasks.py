@@ -24,6 +24,52 @@ def _sicredi_or_none(value: str | None) -> str | None:
     return value
 
 
+def _fmt_num(value) -> str:
+    """Format a numeric value for display, trimming trailing zeros (2 -> '2', 1.5 -> '1,5')."""
+    try:
+        d = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if d == int(d):
+        return str(int(d))
+    return f"{d:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
+def _format_fee_instructions(input_data: dict) -> list[str]:
+    """Build human-readable pt-BR instruction lines from the boleto fee fields.
+
+    Mirrors the structured multa/juros/desconto values sent to Sicredi so the
+    receiving bank teller and the payer see the same penalties in text form.
+    Values equal to "ISENTO" (or missing) are skipped.
+    """
+    lines: list[str] = []
+
+    tipo_multa = _sicredi_or_none(input_data.get("tipo_multa"))
+    multa = input_data.get("multa")
+    if tipo_multa and multa:
+        if tipo_multa == "PERCENTUAL":
+            lines.append(f"Após o vencimento, multa de {_fmt_num(multa)}%.")
+        elif tipo_multa == "VALOR":
+            lines.append(f"Após o vencimento, multa de R$ {_fmt_num(multa)}.")
+
+    tipo_juros = _sicredi_or_none(input_data.get("tipo_juros"))
+    juros = input_data.get("juros")
+    if tipo_juros and juros:
+        if tipo_juros == "PERCENTUAL_MES":
+            lines.append(f"Juros de mora de {_fmt_num(juros)}% ao mês.")
+        elif tipo_juros == "VALOR_DIA":
+            lines.append(f"Juros de mora de R$ {_fmt_num(juros)} ao dia.")
+
+    tipo_desconto = _sicredi_or_none(input_data.get("tipo_desconto"))
+    valor_desconto = input_data.get("valor_desconto_1")
+    if tipo_desconto and valor_desconto:
+        lines.append(
+            f"Desconto de R$ {_fmt_num(valor_desconto)} para pagamento até o vencimento."
+        )
+
+    return lines
+
+
 def _clamp_negativacao(days: int | None) -> int | None:
     """Return None if days is outside the Sicredi-accepted range [3, 99]."""
     if days is None:
@@ -159,6 +205,13 @@ async def _process_batch_creation_async(
                 telefone=bf_data.get("telefone"),
             )
 
+        # Build instruction lines describing the configured fees (multa/juros/desconto)
+        # so the receiving bank and the payer see the penalties in text. Combine with
+        # any user-provided lines, respecting Sicredi limits (mensagens: 4, informativos: 5).
+        fee_lines = _format_fee_instructions(input_data)
+        mensagens = ((input_data.get("mensagens") or []) + fee_lines)[:4]
+        informativos = ((input_data.get("informativos") or []) + fee_lines)[:5]
+
         results = []
 
         for i in range(num_installments):
@@ -166,7 +219,7 @@ async def _process_batch_creation_async(
             seu_numero = f"BAT{batch_id[-4:]}{i + 1:03d}"
 
             boleto_req = CriarBoletoRequest(
-                tipoCobranca=input_data.get("tipo_cobranca", "NORMAL"),
+                tipoCobranca=input_data.get("tipo_cobranca", "HIBRIDO"),
                 codigoBeneficiario=sicredi_client.credentials.codigo_beneficiario,
                 pagador=pagador,
                 especieDocumento=input_data.get(
@@ -192,8 +245,8 @@ async def _process_batch_creation_async(
                 # Sicredi requires 3-99 days; values outside that range cause 400.
                 diasNegativacaoAuto=_clamp_negativacao(input_data.get("dias_negativacao_auto")),
                 validadeAposVencimento=input_data.get("validade_apos_vencimento"),
-                informativos=input_data.get("informativos"),
-                mensagens=input_data.get("mensagens"),
+                informativos=informativos or None,
+                mensagens=mensagens or None,
             )
 
             try:
@@ -208,7 +261,7 @@ async def _process_batch_creation_async(
                     seu_numero=seu_numero,
                     linha_digitavel=api_result.linhaDigitavel,
                     codigo_barras=api_result.codigoBarras,
-                    tipo_cobranca=input_data.get("tipo_cobranca", "NORMAL"),
+                    tipo_cobranca=input_data.get("tipo_cobranca", "HIBRIDO"),
                     especie_documento=input_data.get(
                         "especie_documento", "DUPLICATA_MERCANTIL_INDICACAO"
                     ),

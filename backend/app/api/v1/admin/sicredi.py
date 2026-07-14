@@ -565,6 +565,83 @@ async def get_batch_status(
     )
 
 
+@router.get("/boletos/batch/{batch_id}/carne-pdf")
+async def baixar_carne_batch(
+    batch_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
+):
+    """Download every boleto created in a batch as a single multi-page PDF (carnê).
+
+    Fetches each boleto's PDF from Sicredi (using the stored linhaDigitavel) and
+    concatenates them into one file, ordered by due date, to ease sending to the client.
+    """
+    import asyncio
+    import io
+    from uuid import UUID as _UUID
+
+    from pypdf import PdfReader, PdfWriter
+
+    stmt = select(BatchOperation).where(
+        BatchOperation.id == _UUID(batch_id),
+        BatchOperation.company_id == admin.company_id,
+    )
+    result = await db.execute(stmt)
+    batch = result.scalar_one_or_none()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch operation not found")
+
+    # Collect the boleto ids that were created successfully
+    boleto_ids = [
+        _UUID(r["boleto_id"])
+        for r in (batch.results or [])
+        if r.get("status") == "SUCCESS" and r.get("boleto_id")
+    ]
+    if not boleto_ids:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum boleto gerado com sucesso neste lote para montar o carnê.",
+        )
+
+    stmt_b = (
+        select(Boleto)
+        .where(Boleto.id.in_(boleto_ids), Boleto.company_id == admin.company_id)
+        .order_by(Boleto.data_vencimento.asc())
+    )
+    res_b = await db.execute(stmt_b)
+    boletos = [b for b in res_b.scalars().all() if b.linha_digitavel]
+    if not boletos:
+        raise HTTPException(
+            status_code=422,
+            detail="Boletos do lote não possuem linha digitável para gerar o PDF.",
+        )
+
+    client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+
+    writer = PdfWriter()
+    try:
+        for idx, boleto in enumerate(boletos):
+            pdf_bytes = await client.boletos.gerar_pdf(boleto.linha_digitavel)
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages:
+                writer.add_page(page)
+            # Rate limiting: 500ms between Sicredi API calls
+            if idx < len(boletos) - 1:
+                await asyncio.sleep(0.5)
+        await sicredi_service.persist_token_cache(db, admin.company_id)
+    except SicrediError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
+
+    output = io.BytesIO()
+    writer.write(output)
+
+    return Response(
+        content=output.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=carne_{batch_id}.pdf"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Boleto Queries (static-prefix routes MUST come before {nosso_numero} catch-all)
 # ---------------------------------------------------------------------------

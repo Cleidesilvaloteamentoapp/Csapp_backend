@@ -52,3 +52,6 @@ factory-boy==3.3.1
 python-slugify==8.0.1
 python-dotenv==1.0.0
 orjson==3.9.10
+
+# PDF
+pypdf==5.1.0

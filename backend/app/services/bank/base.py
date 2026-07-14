@@ -73,7 +73,7 @@ class BankProvider(ABC):
         data_vencimento: date,
         pagador: PagadorData,
         seu_numero: str,
-        tipo_cobranca: str = "NORMAL",
+        tipo_cobranca: str = "HIBRIDO",
         especie_documento: str = "DUPLICATA_MERCANTIL_INDICACAO",
         mensagem: Optional[list[str]] = None,
         desconto: Optional[dict] = None,

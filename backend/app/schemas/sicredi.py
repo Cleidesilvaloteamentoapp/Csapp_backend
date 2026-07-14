@@ -128,7 +128,7 @@ class BeneficiarioFinalRequest(BaseModel):
 class CriarBoletoAPIRequest(BaseModel):
     """API request for creating a boleto via admin panel."""
 
-    tipo_cobranca: str = Field("NORMAL", description="NORMAL or HIBRIDO")
+    tipo_cobranca: str = Field("HIBRIDO", description="NORMAL or HIBRIDO")
     pagador: PagadorRequest
     especie_documento: str = Field("DUPLICATA_MERCANTIL_INDICACAO")
     data_vencimento: date

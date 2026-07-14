@@ -32,7 +32,7 @@ class BatchCriarBoletosRequest(BaseModel):
         ..., description="Due date of the first installment"
     )
 
-    tipo_cobranca: str = Field("NORMAL", description="NORMAL or HIBRIDO")
+    tipo_cobranca: str = Field("HIBRIDO", description="NORMAL or HIBRIDO")
     especie_documento: str = Field("DUPLICATA_MERCANTIL_INDICACAO")
 
     beneficiario_final: Optional[BeneficiarioFinalRequest] = None

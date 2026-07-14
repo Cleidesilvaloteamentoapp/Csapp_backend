@@ -66,7 +66,7 @@ class BeneficiarioFinal(BaseModel):
 class CriarBoletoRequest(BaseModel):
     """Payload for creating a new boleto via Sicredi API."""
 
-    tipoCobranca: str = Field("NORMAL", description="NORMAL or HIBRIDO")
+    tipoCobranca: str = Field("HIBRIDO", description="NORMAL or HIBRIDO")
     codigoBeneficiario: str
     pagador: Pagador
     especieDocumento: str = Field("DUPLICATA_MERCANTIL_INDICACAO")
