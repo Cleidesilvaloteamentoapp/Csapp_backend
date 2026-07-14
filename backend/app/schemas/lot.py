@@ -144,9 +144,18 @@ class LotCreate(BaseModel):
     development_id: UUID
     lot_number: str = Field(..., min_length=1, max_length=50)
     block: Optional[str] = Field(None, max_length=50)
+    # Balneário e matrícula são obrigatórios para lotes: evitam terrenos
+    # duplicados (a matrícula é única por empresa).
+    balneario: str = Field(..., min_length=1, max_length=120)
+    registration_number: str = Field(..., min_length=1, max_length=60)
     area_m2: Decimal = Field(..., gt=0)
     price: Decimal = Field(..., gt=0)
     documents: Optional[Dict[str, Any]] = None
+
+    @field_validator("balneario", "registration_number", "lot_number", "block", mode="before")
+    @classmethod
+    def strip_str(cls, v):
+        return v.strip() if isinstance(v, str) else v
 
 
 class LotUpdate(BaseModel):
@@ -154,6 +163,8 @@ class LotUpdate(BaseModel):
 
     lot_number: Optional[str] = Field(None, min_length=1, max_length=50)
     block: Optional[str] = Field(None, max_length=50)
+    balneario: Optional[str] = Field(None, min_length=1, max_length=120)
+    registration_number: Optional[str] = Field(None, min_length=1, max_length=60)
     area_m2: Optional[Decimal] = Field(None, gt=0)
     price: Optional[Decimal] = Field(None, gt=0)
     status: Optional[str] = Field(None, pattern=r"(?i)^(available|reserved|sold)$")
@@ -168,6 +179,8 @@ class LotResponse(BaseModel):
     development_id: UUID
     lot_number: str
     block: Optional[str] = None
+    balneario: Optional[str] = None
+    registration_number: Optional[str] = None
     area_m2: Decimal
     price: Decimal
     status: str

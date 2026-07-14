@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -437,9 +438,33 @@ async def create_lot(
     if not dev:
         raise HTTPException(status_code=404, detail="Development not found in this company")
 
+    # Evita terrenos duplicados: a matrícula é única por empresa.
+    dup = (await db.execute(
+        select(Lot).where(
+            Lot.company_id == admin.company_id,
+            func.lower(Lot.registration_number) == data.registration_number.lower(),
+        )
+    )).scalar_one_or_none()
+    if dup:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Já existe um lote cadastrado com a matrícula {data.registration_number}"
+                f"{f' (balneário {dup.balneario})' if dup.balneario else ''}."
+            ),
+        )
+
     lot = Lot(company_id=admin.company_id, **data.model_dump())
     db.add(lot)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Rede de segurança contra corrida entre a checagem acima e o insert.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Já existe um lote cadastrado com a matrícula {data.registration_number}.",
+        )
     return _lot_response(lot)
 
 

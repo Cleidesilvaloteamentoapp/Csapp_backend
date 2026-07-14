@@ -6,7 +6,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Numeric, String
+from sqlalchemy import ForeignKey, Index, Numeric, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,6 +20,19 @@ class Lot(Base, TenantMixin, TimestampMixin):
 
     __tablename__ = "lots"
 
+    # A matrícula (registro de cartório) é única por empresa: impede o cadastro
+    # duplicado do mesmo terreno. Índice parcial para não conflitar com lotes
+    # legados que ainda não têm matrícula preenchida (registration_number NULL).
+    __table_args__ = (
+        Index(
+            "uq_lots_company_registration",
+            "company_id",
+            "registration_number",
+            unique=True,
+            postgresql_where=text("registration_number IS NOT NULL"),
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
@@ -28,6 +41,10 @@ class Lot(Base, TenantMixin, TimestampMixin):
     )
     lot_number: Mapped[str] = mapped_column(String(50), nullable=False)
     block: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Balneário / localidade do terreno (obrigatório na API para lotes novos).
+    balneario: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Número de matrícula do imóvel (registro de cartório). Ver índice único acima.
+    registration_number: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
     area_m2: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     status: Mapped[LotStatus] = mapped_column(
