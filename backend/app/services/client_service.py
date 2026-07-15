@@ -19,10 +19,39 @@ from app.models.lot import Lot
 from app.models.user import Profile
 from app.schemas.client import ClientCreate, ClientUpdate, ClientResponse
 from app.schemas.common import PaginatedResponse, PaginationParams
+from app.utils.documents import normalize_cpf_cnpj
 from app.utils.exceptions import ResourceNotFoundError, TenantIsolationError
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Postgres expression that strips any non-digit from a stored CPF/CNPJ, so the
+# uniqueness check matches regardless of how legacy rows were formatted.
+_CPF_DIGITS = func.regexp_replace(Client.cpf_cnpj, r"\D", "", "g")
+
+
+async def find_client_by_cpf(
+    db: AsyncSession,
+    company_id: UUID,
+    cpf_cnpj: str,
+    exclude_id: Optional[UUID] = None,
+) -> Optional[Client]:
+    """Return an existing client in this company with the same CPF/CNPJ.
+
+    Comparison is done on digits only, so "123.456.789-00" and "12345678900"
+    are recognised as the same document. Returns None when the CPF is empty
+    or no match exists.
+    """
+    digits = normalize_cpf_cnpj(cpf_cnpj)
+    if not digits:
+        return None
+    query = select(Client).where(
+        Client.company_id == company_id,
+        _CPF_DIGITS == digits,
+    )
+    if exclude_id is not None:
+        query = query.where(Client.id != exclude_id)
+    return (await db.execute(query.limit(1))).scalars().first()
 
 
 async def _fire_admin_notify(db, company_id, key, title, message, n_type, data=None):
@@ -85,6 +114,16 @@ async def create_client(
     data: ClientCreate,
 ) -> Client:
     """Create a new client; optionally create a login profile."""
+    # Trava de duplicidade: bloqueia CPF/CNPJ já cadastrado nesta empresa,
+    # independentemente de criar (ou não) acesso ao portal. A comparação é
+    # feita por dígitos, então formatações diferentes não escapam da trava.
+    existing = await find_client_by_cpf(db, company_id, data.cpf_cnpj)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="CPF/CNPJ já cadastrado para outro cliente. Verifique se o cliente já existe.",
+        )
+
     client = Client(
         company_id=company_id,
         email=data.email,
@@ -184,6 +223,17 @@ async def update_client(
     """Partial update of client data."""
     client = await get_client(db, company_id, client_id)
     update_data = data.model_dump(exclude_unset=True)
+
+    # Trava de duplicidade ao trocar o CPF/CNPJ para um já usado por outro cliente.
+    new_cpf = update_data.get("cpf_cnpj")
+    if new_cpf:
+        clash = await find_client_by_cpf(db, company_id, new_cpf, exclude_id=client_id)
+        if clash is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="CPF/CNPJ já cadastrado para outro cliente. Verifique se o cliente já existe.",
+            )
+
     for field, value in update_data.items():
         setattr(client, field, value)
     await db.flush()

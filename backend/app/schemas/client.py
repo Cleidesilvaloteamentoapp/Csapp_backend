@@ -5,7 +5,9 @@ from datetime import datetime
 from typing import Any, Optional, Dict, List
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+
+from app.utils.documents import normalize_cpf_cnpj
 
 
 class ClientCreate(BaseModel):
@@ -21,6 +23,14 @@ class ClientCreate(BaseModel):
     notes: Optional[str] = None
     create_access: bool = Field(False, description="Create login credentials for the client")
     password: Optional[str] = Field(None, max_length=128)
+
+    @field_validator("cpf_cnpj", mode="before")
+    @classmethod
+    def _normalize_cpf(cls, v):
+        """Store CPF/CNPJ as digits only to prevent format-based duplicates."""
+        if v is None:
+            return v
+        return normalize_cpf_cnpj(str(v))
 
     @model_validator(mode='after')
     def validate_password(self):
@@ -42,6 +52,14 @@ class ClientUpdate(BaseModel):
     address: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
     status: Optional[str] = Field(None, pattern=r"^(ACTIVE|INACTIVE|DEFAULTER|IN_NEGOTIATION|RESCINDED)$")
+
+    @field_validator("cpf_cnpj", mode="before")
+    @classmethod
+    def _normalize_cpf(cls, v):
+        """Store CPF/CNPJ as digits only to prevent format-based duplicates."""
+        if v is None:
+            return v
+        return normalize_cpf_cnpj(str(v))
 
 
 class ClientResponse(BaseModel):

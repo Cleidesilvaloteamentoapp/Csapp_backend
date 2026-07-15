@@ -7,6 +7,15 @@ def _only_digits(value: str) -> str:
     return re.sub(r"\D", "", value or "")
 
 
+def normalize_cpf_cnpj(value: str) -> str:
+    """Canonical storage/compare form for a CPF/CNPJ: digits only.
+
+    Ensures "123.456.789-00" and "12345678900" are treated as the same
+    document, closing the duplicate-registration gap.
+    """
+    return _only_digits(value)
+
+
 def is_valid_cpf(cpf: str) -> bool:
     """Validate a CPF using its two check digits."""
     cpf = _only_digits(cpf)

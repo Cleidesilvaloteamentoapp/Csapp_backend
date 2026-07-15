@@ -90,6 +90,23 @@ async def create_client(
     return ClientResponse.model_validate(client)
 
 
+@router.get("/lookup", response_model=Optional[ClientResponse])
+async def lookup_client_by_cpf(
+    cpf_cnpj: str = Query(..., min_length=1, description="CPF/CNPJ em qualquer formato"),
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("view_clients")),
+):
+    """Busca um cliente existente pelo CPF/CNPJ (comparação por dígitos).
+
+    Alimenta a trava de duplicidade no cadastro: retorna o cliente já cadastrado
+    quando o CPF existe, ou `null` quando está livre para criar um novo.
+    """
+    client = await client_service.find_client_by_cpf(db, admin.company_id, cpf_cnpj)
+    if client is None:
+        return None
+    return ClientResponse.model_validate(client)
+
+
 @router.get("/{client_id}", response_model=ClientResponse)
 async def get_client(
     client_id: UUID,
