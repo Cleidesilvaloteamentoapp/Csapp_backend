@@ -208,6 +208,16 @@ class LotAssignRequest(BaseModel):
     total_value: Decimal = Field(..., gt=0)
     down_payment: Optional[Decimal] = Field(None, ge=0)
     total_installments: Optional[int] = Field(None, ge=1, le=360, description="Number of installments. If omitted, derived from monthly value in payment_plan.")
+    is_legacy: bool = Field(
+        False,
+        description="Cliente antigo: contrato já em andamento. Vincula o lote sem gerar "
+                    "faturas/boletos agora — apenas registra o vínculo para a próxima emissão.",
+    )
+    paid_installments: Optional[int] = Field(
+        None, ge=0, le=360,
+        description="Parcelas já pagas antes do sistema (apenas para cliente antigo). "
+                    "Usado para calcular parcelas restantes e o ciclo da próxima emissão.",
+    )
     annual_adjustment_rate: Optional[Decimal] = Field(None, description="Fixed annual rate on top of IPCA in %, e.g. 5 = 5%")
     penalty_rate: Optional[Decimal] = Field(None, description="Custom penalty rate in %, e.g. 2 = 2%")
     daily_interest_rate: Optional[Decimal] = Field(None, description="Custom daily interest rate in %, e.g. 0.033 = 0.033%/day")

@@ -689,6 +689,16 @@ async def assign_lot(
     if adj_custom_rate is None and cfs:
         adj_custom_rate = cfs.adjustment_custom_rate
 
+    # Legacy client (cliente antigo): contract already in progress. We record the
+    # link and how many installments were already paid, but we DON'T generate any
+    # invoices/boletos now — the next annual emission picks up from the right cycle.
+    paid_installments = 0
+    starting_cycle = 1
+    if data.is_legacy:
+        paid_installments = min(data.paid_installments or 0, num_installments)
+        # Each cycle is 12 installments; a completed cycle rolls into the next one.
+        starting_cycle = (paid_installments // 12) + 1
+
     # Create client_lot with new contract fields
     cl = ClientLot(
         company_id=cid,
@@ -698,7 +708,8 @@ async def assign_lot(
         total_value=data.total_value,
         down_payment=down_payment,
         total_installments=num_installments,
-        current_cycle=1,
+        paid_installments=paid_installments,
+        current_cycle=starting_cycle,
         current_installment_value=installment_value,
         annual_adjustment_rate=data.annual_adjustment_rate or Decimal("0.05"),
         penalty_rate=penalty_rate,
@@ -716,6 +727,21 @@ async def assign_lot(
     # Mark lot as sold
     lot.status = LotStatus.SOLD
     await db.flush()
+
+    # For a legacy client we intentionally skip invoice generation: the contract
+    # is already running and its boletos will be issued on the next annual cycle.
+    if data.is_legacy:
+        await db.flush()
+        await log_audit(
+            db, user_id=admin.id, company_id=cid,
+            table_name="client_lots", operation="CREATE",
+            resource_id=str(cl.id),
+            detail=f"Lot {lot.lot_number} assigned to legacy client {client.full_name} "
+                   f"(cliente antigo). No invoices generated; {paid_installments} "
+                   f"installment(s) marked as paid, resuming at cycle {starting_cycle}.",
+            ip_address=request.client.host if request.client else None,
+        )
+        return ClientLotResponse.model_validate(cl)
 
     # Generate first cycle invoices (max 12 per cycle)
     first_due_str = plan.get("first_due")

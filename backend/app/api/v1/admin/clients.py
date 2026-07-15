@@ -194,16 +194,41 @@ async def get_client_invoices(
     return [InvoiceResponse.model_validate(r) for r in rows.scalars().all()]
 
 
-@router.get("/{client_id}/documents", response_model=list[str])
+@router.get("/{client_id}/documents", response_model=list[ClientDocumentResponse])
 async def get_client_documents(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_documents")),
 ):
-    """List document URLs for a client."""
-    client = await client_service.get_client(db, admin.company_id, client_id)
-    docs = client.documents or []
-    return [get_public_url(d) if isinstance(d, str) else d for d in docs]
+    """List structured documents for a client (from the client_documents table).
+
+    Returns the full document metadata (name, type, tags, visibility) plus a
+    fresh signed ``file_url`` for each one, so the client's ficha can list them
+    and offer view/download. Documents are stored in the dedicated
+    ``client_documents`` table — the legacy ``clients.documents`` JSONB column is
+    no longer used as the source of truth.
+    """
+    # Ensure the client exists and belongs to the admin's company.
+    await client_service.get_client(db, admin.company_id, client_id)
+
+    rows = await db.execute(
+        select(ClientDocument)
+        .where(
+            ClientDocument.client_id == client_id,
+            ClientDocument.company_id == admin.company_id,
+        )
+        .order_by(ClientDocument.created_at.desc())
+    )
+
+    result: list[dict] = []
+    for doc in rows.scalars().all():
+        payload = ClientDocumentResponse.model_validate(doc).model_dump()
+        try:
+            payload["file_url"] = get_public_url(doc.file_path)
+        except Exception:
+            payload["file_url"] = None
+        result.append(payload)
+    return result
 
 
 @router.post(
