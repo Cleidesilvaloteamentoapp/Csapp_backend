@@ -19,10 +19,16 @@ class AdminStats(BaseModel):
     total_clients: int = 0
     active_clients: int = 0
     defaulter_clients: int = 0
+    # Client control metrics (command tower)
+    inactive_clients: int = 0
+    in_negotiation_clients: int = 0
+    new_clients_this_month: int = 0
+    active_contracts: int = 0
     open_service_orders: int = 0
     completed_service_orders: int = 0
     total_lots: int = 0
     available_lots: int = 0
+    reserved_lots: int = 0
     sold_lots: int = 0
 
 
@@ -33,6 +39,9 @@ class FinancialOverview(BaseModel):
     total_received: Decimal = Decimal("0")
     total_overdue: Decimal = Decimal("0")
     overdue_count: int = 0
+    # Collections coming due within the next 7 days.
+    due_soon_amount: Decimal = Decimal("0")
+    due_soon_count: int = 0
 
 
 class RevenueChartPoint(BaseModel):
@@ -50,12 +59,12 @@ class ServiceChartPoint(BaseModel):
 
 
 class RecentActivity(BaseModel):
-    """Generic recent activity entry."""
+    """Generic recent activity entry (sourced from the audit trail)."""
 
     id: UUID
-    action: str
+    type: str
     description: str
-    timestamp: datetime
+    created_at: datetime
 
 
 # ---------------------------------------------------------------------------
