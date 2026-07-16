@@ -64,6 +64,11 @@ async def test_upload_then_list_client_documents(
     assert created["file_name"] == "matricula.pdf"
     assert created["document_type"] == "MATRICULA"
     assert created["file_url"] == signed_url
+    # Admin/superadmin uploads skip the review queue — they are immediately
+    # APPROVED and available on the ficha; only client uploads stay pending.
+    assert created["status"] == "APPROVED"
+    assert created["reviewed_by"] == str(company_admin.id)
+    assert created["reviewed_at"] is not None
 
     # Act 2: list documents like the client's ficha does.
     with patch("app.api.v1.admin.clients.get_public_url", return_value=signed_url):

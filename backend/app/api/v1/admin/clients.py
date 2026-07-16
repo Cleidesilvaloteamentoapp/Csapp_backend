@@ -3,6 +3,7 @@ from typing import Optional
 """Admin client management endpoints."""
 
 import json
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile, File, status
@@ -286,6 +287,10 @@ async def upload_client_document(
     except StorageError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail) from exc
 
+    # Documentos enviados por admin/superadmin/staff já entram aprovados —
+    # aparecem imediatamente na ficha do cliente/lote, sem fila de revisão.
+    # Apenas uploads feitos pelo próprio cliente (client/documents) ficam
+    # PENDING_REVIEW aguardando aprovação do admin.
     doc = ClientDocument(
         company_id=admin.company_id,
         client_id=client.id,
@@ -296,7 +301,9 @@ async def upload_client_document(
         description=description,
         tags=parsed_tags,
         visible_to_client=visible_to_client,
-        status=DocumentStatus.PENDING_REVIEW,
+        status=DocumentStatus.APPROVED,
+        reviewed_by=admin.id,
+        reviewed_at=datetime.now(timezone.utc),
     )
     db.add(doc)
     await db.flush()
