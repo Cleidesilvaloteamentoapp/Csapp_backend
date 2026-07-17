@@ -41,6 +41,7 @@ async def log_sicredi_event(
     http_status: Optional[int] = None,
     success: Optional[bool] = None,
     payload: object = None,
+    webhook_event_id: Optional[str] = None,
 ) -> Optional[SicrediEvent]:
     """Record one Sicredi request/response. Best-effort: never raises.
 
@@ -57,6 +58,7 @@ async def log_sicredi_event(
             http_status=http_status,
             success=success,
             payload=_sanitize(payload),
+            webhook_event_id=webhook_event_id,
         )
         db.add(event)
         await db.flush()

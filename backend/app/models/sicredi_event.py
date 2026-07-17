@@ -47,6 +47,10 @@ class SicrediEvent(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Sicredi's idempotency key for inbound webhooks (idEventoWebhook). Indexed,
+    # NOT unique: redeliveries must still be insertable as WEBHOOK_DUPLICATE rows.
+    webhook_event_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+
     http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     success: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     # Full request or response payload, stored verbatim for audit.

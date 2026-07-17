@@ -12,9 +12,11 @@ Usage:
 """
 
 from typing import Any, Optional
+from uuid import UUID
 
 import httpx
 
+from app.services.sicredi.audit_recorder import record_call
 from app.services.sicredi.auth import SicrediAuth
 from app.services.sicredi.boletos import SicrediBoletos
 from app.services.sicredi.config import HTTP_TIMEOUT, SicrediCredentials
@@ -43,6 +45,8 @@ class SicrediClient:
     def __init__(self, credentials: SicrediCredentials):
         self._creds = credentials
         self._auth = SicrediAuth(credentials)
+        # Set by sicredi_service.get_sicredi_client so recorded calls carry the tenant.
+        self.company_id: Optional[UUID] = None
 
         # Sub-modules receive a reference to this client's request method
         self.boletos = SicrediBoletos(self)
@@ -121,6 +125,15 @@ class SicrediClient:
                     headers=headers,
                 )
         except httpx.TimeoutException as exc:
+            record_call(
+                company_id=self.company_id,
+                method=method,
+                url=url,
+                status_code=None,
+                success=False,
+                request_payload=json or data or params,
+                response_payload={"error": "timeout"},
+            )
             raise SicrediTimeoutError(detail=f"Request to {url} timed out: {exc}")
 
         logger.debug(
@@ -130,7 +143,7 @@ class SicrediClient:
             status=resp.status_code,
         )
 
-        # Handle 401 with one automatic retry
+        # Handle 401 with one automatic retry (record only the final leg below)
         if resp.status_code == 401 and retry_on_401:
             logger.warning("sicredi_401_retry", url=url)
             self._auth.invalidate()
@@ -141,6 +154,16 @@ class SicrediClient:
                 retry_on_401=False,
                 expect_binary=expect_binary,
             )
+
+        record_call(
+            company_id=self.company_id,
+            method=method,
+            url=url,
+            status_code=resp.status_code,
+            success=resp.status_code in (200, 201, 202),
+            request_payload=json or data or params,
+            response_payload={"binary_bytes": len(resp.content)} if expect_binary else self._safe_body(resp),
+        )
 
         # Success — 202 Accepted is returned for async commands like baixa
         # (statusComando=MOVIMENTO_ENVIADO) and must be treated as success.

@@ -24,7 +24,7 @@ from app.models.invoice import Invoice
 from app.services.admin_notify_service import notify_admins
 from app.services.notification_settings_service import get_or_create as get_notif_settings
 from sqlalchemy import select
-from datetime import date as dt_date, datetime, timezone
+from datetime import date as dt_date, datetime, timedelta, timezone
 from app.schemas.sicredi import (
     AlterarDescontoAPIRequest,
     AlterarJurosAPIRequest,
@@ -51,7 +51,9 @@ from app.services.sicredi.schemas import (
     WebhookContratoRequest,
 )
 from app.services import sicredi_service
+from app.services.boleto_status_service import mark_boleto_liquidado
 from app.services.sicredi.exceptions import SicrediError
+from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
 from app.models.batch_operation import BatchOperation
 from app.schemas.batch import (
     BatchCriarBoletosRequest,
@@ -62,11 +64,45 @@ from app.schemas.batch import (
 )
 from app.tasks.batch_tasks import process_batch_creation, process_batch_operation
 from app.core.audit import log_audit
+from app.core.database import async_session_factory
+from app.services.sicredi.audit_recorder import (
+    persist_recorded_calls,
+    start_recording,
+    stop_recording,
+)
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/sicredi", tags=["Admin Sicredi"])
+
+async def sicredi_audit_trail():
+    """Router-wide dependency: record every outbound Sicredi call made while
+    handling the request and persist them as OUTBOUND sicredi_events.
+
+    Uses its own DB session so the audit rows survive even when the endpoint
+    raises (get_db rolls back its session on error) — which is exactly the case
+    that previously left the audit trail empty for failed calls.
+    """
+    token = start_recording()
+    try:
+        yield
+    finally:
+        calls = stop_recording(token)
+        if not calls:
+            return
+        try:
+            async with async_session_factory() as audit_db:
+                await persist_recorded_calls(audit_db, calls)
+                await audit_db.commit()
+        except Exception as exc:  # auditing must never break the response
+            logger.warning("sicredi_audit_trail_persist_failed", error=str(exc))
+
+
+router = APIRouter(
+    prefix="/sicredi",
+    tags=["Admin Sicredi"],
+    dependencies=[Depends(sicredi_audit_trail)],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -776,6 +812,18 @@ async def sync_boleto_status(
     is_baixa_externa = situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO")
     
     if not new_status:
+        # Record unknown situações so the mapping gap is visible in the audit trail
+        # instead of silently doing nothing.
+        await log_sicredi_event(
+            db,
+            direction=DIRECTION_OUTBOUND,
+            event_type="UNKNOWN_SITUACAO",
+            company_id=admin.company_id,
+            nosso_numero=nosso_numero,
+            success=True,
+            payload=sicredi_data.model_dump(mode="json"),
+        )
+        await db.commit()
         return {
             "status": "noop",
             "nosso_numero": nosso_numero,
@@ -795,24 +843,15 @@ async def sync_boleto_status(
 
     previous_status = boleto_record.status
     previous_writeoff_type = boleto_record.writeoff_type
-    boleto_record.status = new_status
-    
-    # Track external baixa - only mark if not already tracked as manual
-    if is_baixa_externa and previous_writeoff_type != WriteoffType.MANUAL_ADMIN:
-        boleto_record.writeoff_type = WriteoffType.BAIXA_EXTERNA
-        boleto_record.writeoff_reason = f"Baixa externa via Sicredi (situacao: {sicredi_data.situacao}). Sincronizado via endpoint /sync."
-    
+
     if new_status == BoletoStatus.LIQUIDADO:
-        if not boleto_record.data_liquidacao:
-            boleto_record.data_liquidacao = datetime.now(timezone.utc).date()
-        if boleto_record.invoice_id:
-            inv_result = await db.execute(
-                select(Invoice).where(Invoice.id == boleto_record.invoice_id)
-            )
-            linked_invoice = inv_result.scalar_one_or_none()
-            if linked_invoice and linked_invoice.status != InvoiceStatus.PAID:
-                linked_invoice.status = InvoiceStatus.PAID
-                linked_invoice.paid_at = datetime.now(timezone.utc)
+        await mark_boleto_liquidado(db, boleto_record, source="manual_sync")
+    else:
+        boleto_record.status = new_status
+        # Track external baixa - only mark if not already tracked as manual
+        if is_baixa_externa and previous_writeoff_type != WriteoffType.MANUAL_ADMIN:
+            boleto_record.writeoff_type = WriteoffType.BAIXA_EXTERNA
+            boleto_record.writeoff_reason = f"Baixa externa via Sicredi (situacao: {sicredi_data.situacao}). Sincronizado via endpoint /sync."
 
     await db.commit()
 
@@ -1245,3 +1284,85 @@ async def alterar_webhook_contrato(
         raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Integration health / diagnostics
+# ---------------------------------------------------------------------------
+
+@router.get("/integration-health")
+async def integration_health(
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_sicredi")),
+):
+    """Snapshot of the Sicredi integration health for the admin's company.
+
+    Surfaces the webhook contract status at Sicredi, when the last webhook /
+    reconciliation happened, and open-boleto counts — so a stalled beat/worker or
+    a missing webhook contract (the usual causes of "paid but not updated") are
+    visible instead of silent.
+    """
+    from sqlalchemy import func
+    from app.models.sicredi_event import SicrediEvent
+
+    company_filter = SicrediEvent.company_id == admin.company_id
+
+    # Webhook contract at Sicredi (best-effort — never fail the whole endpoint).
+    webhook_contract = None
+    try:
+        client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+        contracts = await client.webhooks.consultar_contratos()
+        await sicredi_service.persist_token_cache(db, admin.company_id)
+        webhook_contract = {"status": "ok", "data": contracts}
+    except SicrediError as exc:
+        webhook_contract = {"status": "error", "detail": str(exc.detail or exc)}
+    except Exception as exc:
+        webhook_contract = {"status": "error", "detail": str(exc)}
+
+    async def _last_event_at(*event_types: str):
+        stmt = select(SicrediEvent.created_at).where(company_filter)
+        if event_types:
+            stmt = stmt.where(SicrediEvent.event_type.in_(event_types))
+        stmt = stmt.order_by(SicrediEvent.created_at.desc()).limit(1)
+        return (await db.execute(stmt)).scalar_one_or_none()
+
+    last_webhook_at = (
+        await db.execute(
+            select(SicrediEvent.created_at)
+            .where(company_filter, SicrediEvent.direction == "INBOUND")
+            .order_by(SicrediEvent.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    last_sync_at = await _last_event_at("SYNC_RUN")
+    last_reconcile_at = await _last_event_at("SYNC_LIQUIDADOS_DIA")
+
+    open_boletos = (
+        await db.execute(
+            select(func.count())
+            .select_from(Boleto)
+            .where(
+                Boleto.company_id == admin.company_id,
+                Boleto.status.in_([BoletoStatus.NORMAL, BoletoStatus.VENCIDO]),
+            )
+        )
+    ).scalar_one()
+
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    events_last_24h = (
+        await db.execute(
+            select(func.count())
+            .select_from(SicrediEvent)
+            .where(company_filter, SicrediEvent.created_at >= since)
+        )
+    ).scalar_one()
+
+    return {
+        "webhook_contract": webhook_contract,
+        "last_webhook_received_at": last_webhook_at,
+        "last_sync_run_at": last_sync_at,
+        "last_reconcile_at": last_reconcile_at,
+        "open_boletos": open_boletos,
+        "events_last_24h": events_last_24h,
+    }

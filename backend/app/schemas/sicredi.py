@@ -260,3 +260,19 @@ class WebhookEventResponse(BaseModel):
     valor_liquidacao: Optional[Decimal] = None
     invoice_id: Optional[str] = None
     detail: Optional[str] = None
+
+
+class WebhookBatchResponse(BaseModel):
+    """Aggregate result for one webhook delivery (which may carry many events).
+
+    Always returned with HTTP 200 once the body has been read, so Sicredi keeps
+    delivering. Per-event outcomes are in `results`.
+    """
+
+    status: str = "ok"
+    received: int = 0
+    processed: int = 0
+    duplicates: int = 0
+    ignored: int = 0
+    errors: int = 0
+    results: list[WebhookEventResponse] = Field(default_factory=list)

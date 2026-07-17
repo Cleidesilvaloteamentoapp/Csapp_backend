@@ -69,6 +69,10 @@ celery.conf.beat_schedule = {
     },
     "sync-open-boletos": {
         "task": "app.tasks.sicredi_sync_tasks.sync_open_boletos",
-        "schedule": crontab(hour="*/4", minute=15),  # every 4 hours
+        "schedule": crontab(minute=15),  # hourly – safety net for missed webhooks
+    },
+    "reconcile-liquidados-daily": {
+        "task": "app.tasks.sicredi_sync_tasks.reconcile_liquidados",
+        "schedule": crontab(hour=1, minute=30),  # 01:30 – authoritative paid-boletos pull
     },
 }

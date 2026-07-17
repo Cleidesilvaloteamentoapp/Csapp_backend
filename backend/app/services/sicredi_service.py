@@ -57,7 +57,9 @@ async def get_sicredi_client(db: AsyncSession, company_id: UUID) -> SicrediClien
 
     # Reuse cached client if credential ID matches
     if cred.id in _client_cache:
-        return _client_cache[cred.id]
+        cached = _client_cache[cred.id]
+        cached.company_id = company_id
+        return cached
 
     env = SicrediEnvironment(cred.environment) if cred.environment in ("sandbox", "production") else SicrediEnvironment.PRODUCTION
 
@@ -79,6 +81,7 @@ async def get_sicredi_client(db: AsyncSession, company_id: UUID) -> SicrediClien
         credentials._refresh_expires_at = cred.refresh_expires_at.timestamp() if cred.refresh_expires_at else None
 
     client = SicrediClient(credentials=credentials)
+    client.company_id = company_id
     _client_cache[cred.id] = client
 
     logger.info("sicredi_client_loaded", company_id=str(company_id), credential_id=str(cred.id))

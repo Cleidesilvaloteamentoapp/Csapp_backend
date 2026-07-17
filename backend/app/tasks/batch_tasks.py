@@ -120,6 +120,11 @@ async def _process_batch_creation_async(
     from app.models.client import Client
     from app.models.enums import BoletoStatus
     from app.services import sicredi_service
+    from app.services.sicredi.audit_recorder import (
+        persist_recorded_calls,
+        start_recording,
+        stop_recording,
+    )
     from app.services.sicredi.exceptions import SicrediError
     from app.services.sicredi.schemas import (
         BeneficiarioFinal,
@@ -150,6 +155,9 @@ async def _process_batch_creation_async(
             batch.error_summary = f"Failed to get Sicredi client: {str(exc)}"
             await db.commit()
             return
+
+        # Record every outbound Sicredi call for the audit trail.
+        audit_token = start_recording()
 
         # Verify client exists
         client_id = UUID(input_data["client_id"])
@@ -349,6 +357,14 @@ async def _process_batch_creation_async(
 
         batch.results = results
         await db.commit()
+
+        # Persist the outbound Sicredi calls made during this batch.
+        try:
+            await persist_recorded_calls(db, stop_recording(audit_token))
+            await db.commit()
+        except Exception as exc:
+            logger.warning("batch_creation_audit_failed", batch_id=batch_id, error=str(exc))
+
         logger.info(
             "batch_creation_completed",
             batch_id=batch_id,
@@ -390,6 +406,11 @@ async def _process_batch_operation_async(
     from app.models.boleto import Boleto
     from app.models.enums import BoletoStatus
     from app.services import sicredi_service
+    from app.services.sicredi.audit_recorder import (
+        persist_recorded_calls,
+        start_recording,
+        stop_recording,
+    )
     from app.services.sicredi.exceptions import SicrediError
     from app.services.sicredi.schemas import (
         AlterarDescontoRequest,
@@ -421,6 +442,9 @@ async def _process_batch_operation_async(
             batch.error_summary = f"Failed to get Sicredi client: {str(exc)}"
             await db.commit()
             return
+
+        # Record every outbound Sicredi call for the audit trail.
+        audit_token = start_recording()
 
         results = []
 
@@ -503,6 +527,14 @@ async def _process_batch_operation_async(
 
         batch.results = results
         await db.commit()
+
+        # Persist the outbound Sicredi calls made during this batch.
+        try:
+            await persist_recorded_calls(db, stop_recording(audit_token))
+            await db.commit()
+        except Exception as exc:
+            logger.warning("batch_operation_audit_failed", batch_id=batch_id, error=str(exc))
+
         logger.info(
             "batch_operation_completed",
             batch_id=batch_id,
