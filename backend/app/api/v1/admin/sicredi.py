@@ -777,41 +777,25 @@ async def consultar_boleto(
 
 @router.post("/boletos/sync-all")
 async def sync_all_boletos(
-    db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
-    """Reconcile all open boletos with Sicredi on demand and return a summary.
+    """Trigger an on-demand reconciliation of the company's open boletos.
 
-    Runs the same logic as the hourly job for the admin's company, synchronously,
-    so admins can trigger a sync without waiting for the schedule and see an
-    overview (checked / updated / errors, with sample error messages). The
-    per-call audit recorder is paused so this produces a single SYNC_RUN event
-    rather than one row per boleto.
+    Enqueues the same Celery job the scheduler runs (so it can't time out the
+    HTTP request while querying dozens of boletos) and returns immediately. The
+    frontend then polls the audit trail for the resulting SYNC_RUN event, which
+    carries the overview (checked / updated / errors, with sample error
+    messages). Requires the Celery worker to be running.
     """
-    from app.services.sicredi.audit_recorder import pause_recording, resume_recording
-    from app.tasks.sicredi_sync_tasks import sync_company_open_boletos
+    from app.tasks.sicredi_sync_tasks import sync_boletos_for_company
 
-    sicredi_client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+    sync_boletos_for_company.delay(str(admin.company_id))
 
-    audit_pause = pause_recording()
-    try:
-        summary = await sync_company_open_boletos(
-            db, sicredi_client, admin.company_id, delay=0.1
-        )
-    finally:
-        resume_recording(audit_pause)
-
-    await sicredi_service.persist_token_cache(db, admin.company_id)
-    await db.commit()
-
-    logger.info(
-        "sicredi_sync_all",
-        company_id=str(admin.company_id),
-        checked=summary["checked"],
-        updated=summary["updated"],
-        consult_errors=summary["consult_errors"],
-    )
-    return summary
+    logger.info("sicredi_sync_all_enqueued", company_id=str(admin.company_id))
+    return {
+        "status": "started",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.post("/boletos/{nosso_numero}/sync")

@@ -279,10 +279,53 @@ async def _reconcile_liquidados_async(session_factory: TaskSessionFactory):
         logger.info("sicredi_reconcile_completed", total_updated=total_updated)
 
 
+async def _sync_company_async(session_factory: TaskSessionFactory, company_id: str):
+    from uuid import UUID
+
+    from app.services import sicredi_service
+    from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
+
+    cid = UUID(company_id) if isinstance(company_id, str) else company_id
+
+    async with session_factory() as db:
+        try:
+            sicredi_client = await sicredi_service.get_sicredi_client(db, cid)
+        except Exception as exc:
+            # Emit a SYNC_RUN so an on-demand trigger always produces a visible
+            # result (the frontend polls for it) even when the client can't load.
+            logger.warning("sicredi_sync_no_client", company_id=str(cid), error=str(exc))
+            await log_sicredi_event(
+                db,
+                direction=DIRECTION_OUTBOUND,
+                event_type="SYNC_RUN",
+                company_id=cid,
+                success=False,
+                payload={
+                    "checked": 0,
+                    "updated": 0,
+                    "consult_errors": 0,
+                    "unknown_situacoes": [],
+                    "error_samples": [{"error": f"Falha ao carregar credencial Sicredi: {exc}", "nosso_numero": ""}],
+                },
+            )
+            await db.commit()
+            return
+
+        await sync_company_open_boletos(db, sicredi_client, cid)
+        await sicredi_service.persist_token_cache(db, cid)
+        await db.commit()
+
+
 @celery.task(name="app.tasks.sicredi_sync_tasks.sync_open_boletos")
 def sync_open_boletos():
     """Reconcile open boletos with Sicredi (catches missed webhooks)."""
     run_in_task_loop(_sync_open_boletos_async)
+
+
+@celery.task(name="app.tasks.sicredi_sync_tasks.sync_boletos_for_company")
+def sync_boletos_for_company(company_id: str):
+    """On-demand reconcile for a single company (triggered from the admin UI)."""
+    run_in_task_loop(lambda sf: _sync_company_async(sf, company_id))
 
 
 @celery.task(name="app.tasks.sicredi_sync_tasks.reconcile_liquidados")
