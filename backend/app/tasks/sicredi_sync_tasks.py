@@ -35,16 +35,112 @@ _SITUACAO_MAP = {
 _MAX_PER_COMPANY = 200
 
 
-async def _sync_open_boletos_async(session_factory: TaskSessionFactory):
+async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: float = 0.35) -> dict:
+    """Reconcile one company's open boletos with Sicredi and return a summary.
+
+    Shared by the hourly Celery task and the on-demand admin "sync-all" endpoint.
+    Writes one SYNC_RUN audit event (with error_samples so a full-run failure's
+    cause is visible) and returns the same counts to the caller. The caller
+    commits and persists the token cache.
+    """
     from sqlalchemy import select
 
     from app.models.boleto import Boleto
     from app.models.enums import BoletoStatus, WriteoffType
-    from app.models.sicredi_credential import SicrediCredential
-    from app.services import sicredi_service
     from app.services.boleto_status_service import mark_boleto_liquidado
     from app.services.sicredi.exceptions import SicrediError
     from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
+
+    open_boletos = (await db.execute(
+        select(Boleto)
+        .where(
+            Boleto.company_id == company_id,
+            Boleto.status.in_([BoletoStatus.NORMAL, BoletoStatus.VENCIDO]),
+            Boleto.nosso_numero.isnot(None),
+        )
+        .limit(_MAX_PER_COMPANY)
+    )).scalars().all()
+
+    updated = 0
+    consult_errors = 0
+    unknown_situacoes: set = set()
+    error_samples: dict = {}  # error message -> first nosso_numero that hit it
+
+    for idx, boleto in enumerate(open_boletos):
+        # Space out calls so Sicredi doesn't rate-limit the whole run.
+        if idx > 0 and delay > 0:
+            await asyncio.sleep(delay)
+        try:
+            data = await sicredi_client.boletos.consultar_por_nosso_numero(
+                boleto.nosso_numero
+            )
+        except SicrediError as exc:
+            consult_errors += 1
+            detail = str(exc.detail or exc)
+            status_code = getattr(exc, "status_code", None)
+            key = f"HTTP {status_code}: {detail}" if status_code else detail
+            if key not in error_samples and len(error_samples) < 5:
+                error_samples[key] = boleto.nosso_numero
+            logger.warning(
+                "sicredi_sync_consult_failed",
+                nosso_numero=boleto.nosso_numero,
+                status_code=status_code,
+                error=detail,
+            )
+            continue
+
+        situacao = (data.situacao or "").upper()
+        mapped = _SITUACAO_MAP.get(situacao)
+        if not mapped:
+            if situacao:
+                unknown_situacoes.add(situacao)
+            continue
+        new_status = BoletoStatus(mapped)
+        if new_status == boleto.status:
+            continue
+
+        if new_status == BoletoStatus.LIQUIDADO:
+            await mark_boleto_liquidado(db, boleto, source="sync_open_boletos")
+        else:
+            boleto.status = new_status
+            if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
+                if boleto.writeoff_type != WriteoffType.MANUAL_ADMIN:
+                    boleto.writeoff_type = WriteoffType.BAIXA_EXTERNA
+                    boleto.writeoff_reason = (
+                        f"Baixa externa via Sicredi (situacao: {data.situacao}). "
+                        "Sincronizado por tarefa periódica."
+                    )
+        updated += 1
+
+    summary = {
+        "checked": len(open_boletos),
+        "updated": updated,
+        "consult_errors": consult_errors,
+        "unknown_situacoes": sorted(unknown_situacoes),
+        # Distinct error messages (with an example boleto) so the cause of a
+        # full-run failure is visible on the audit page and in the sync dialog.
+        "error_samples": [
+            {"error": k, "nosso_numero": v} for k, v in error_samples.items()
+        ],
+    }
+
+    # Heartbeat: proves the job ran for this company and how much it did.
+    await log_sicredi_event(
+        db,
+        direction=DIRECTION_OUTBOUND,
+        event_type="SYNC_RUN",
+        company_id=company_id,
+        success=True,
+        payload=summary,
+    )
+    return summary
+
+
+async def _sync_open_boletos_async(session_factory: TaskSessionFactory):
+    from sqlalchemy import select
+
+    from app.models.sicredi_credential import SicrediCredential
+    from app.services import sicredi_service
 
     async with session_factory() as db:
         company_ids = (await db.execute(
@@ -59,88 +155,8 @@ async def _sync_open_boletos_async(session_factory: TaskSessionFactory):
                 logger.warning("sicredi_sync_no_client", company_id=str(cid), error=str(exc))
                 continue
 
-            open_boletos = (await db.execute(
-                select(Boleto)
-                .where(
-                    Boleto.company_id == cid,
-                    Boleto.status.in_([BoletoStatus.NORMAL, BoletoStatus.VENCIDO]),
-                    Boleto.nosso_numero.isnot(None),
-                )
-                .limit(_MAX_PER_COMPANY)
-            )).scalars().all()
-
-            updated = 0
-            consult_errors = 0
-            unknown_situacoes: set[str] = set()
-            error_samples: dict[str, str] = {}  # detail -> first nosso_numero that hit it
-
-            for idx, boleto in enumerate(open_boletos):
-                # Space out calls so Sicredi doesn't rate-limit the whole run.
-                if idx > 0:
-                    await asyncio.sleep(0.35)
-                try:
-                    data = await sicredi_client.boletos.consultar_por_nosso_numero(
-                        boleto.nosso_numero
-                    )
-                except SicrediError as exc:
-                    consult_errors += 1
-                    detail = str(exc.detail or exc)
-                    status_code = getattr(exc, "status_code", None)
-                    key = f"HTTP {status_code}: {detail}" if status_code else detail
-                    if key not in error_samples and len(error_samples) < 5:
-                        error_samples[key] = boleto.nosso_numero
-                    logger.warning(
-                        "sicredi_sync_consult_failed",
-                        nosso_numero=boleto.nosso_numero,
-                        status_code=status_code,
-                        error=detail,
-                    )
-                    continue
-
-                situacao = (data.situacao or "").upper()
-                mapped = _SITUACAO_MAP.get(situacao)
-                if not mapped:
-                    if situacao:
-                        unknown_situacoes.add(situacao)
-                    continue
-                new_status = BoletoStatus(mapped)
-                if new_status == boleto.status:
-                    continue
-
-                if new_status == BoletoStatus.LIQUIDADO:
-                    await mark_boleto_liquidado(db, boleto, source="sync_open_boletos")
-                else:
-                    boleto.status = new_status
-                    if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
-                        if boleto.writeoff_type != WriteoffType.MANUAL_ADMIN:
-                            boleto.writeoff_type = WriteoffType.BAIXA_EXTERNA
-                            boleto.writeoff_reason = (
-                                f"Baixa externa via Sicredi (situacao: {data.situacao}). "
-                                "Sincronizado por tarefa periódica."
-                            )
-                updated += 1
-
-            total_synced += updated
-
-            # Heartbeat: proves the job ran for this company and how much it did.
-            await log_sicredi_event(
-                db,
-                direction=DIRECTION_OUTBOUND,
-                event_type="SYNC_RUN",
-                company_id=cid,
-                success=True,
-                payload={
-                    "checked": len(open_boletos),
-                    "updated": updated,
-                    "consult_errors": consult_errors,
-                    "unknown_situacoes": sorted(unknown_situacoes),
-                    # Distinct error messages (with an example boleto) so the cause
-                    # of a full-run failure is visible on the audit page.
-                    "error_samples": [
-                        {"error": k, "nosso_numero": v} for k, v in error_samples.items()
-                    ],
-                },
-            )
+            summary = await sync_company_open_boletos(db, sicredi_client, cid)
+            total_synced += summary["updated"]
 
             await sicredi_service.persist_token_cache(db, cid)
             await db.commit()

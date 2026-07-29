@@ -17,6 +17,19 @@ from typing import Any, Optional
 from uuid import UUID
 
 _sink: ContextVar[Optional[list]] = ContextVar("sicredi_audit_sink", default=None)
+# When paused, record_call is a no-op even inside an active scope. Used by bulk
+# operations (e.g. manual sync-all) that produce their own summary event and
+# would otherwise flood the trail with one row per boleto consulted.
+_paused: ContextVar[bool] = ContextVar("sicredi_audit_paused", default=False)
+
+
+def pause_recording() -> Token:
+    """Suspend per-call recording within the current scope. Returns a reset token."""
+    return _paused.set(True)
+
+
+def resume_recording(token: Token) -> None:
+    _paused.reset(token)
 
 
 @dataclass
@@ -55,6 +68,8 @@ def record_call(
     nosso_numero: Optional[str] = None,
 ) -> None:
     """Record one Sicredi call, if a recording scope is active (else no-op)."""
+    if _paused.get():
+        return
     sink = _sink.get()
     if sink is None:
         return

@@ -134,9 +134,42 @@ class DevelopmentFilter(BaseModel):
     max_price: Optional[Decimal] = None
 
 
+class DevelopmentDeletePreview(BaseModel):
+    """What an admin is about to wipe out when deleting a development.
+
+    Feeds the confirmation dialog: counts of everything that the cascade would
+    remove, plus whether the deletion is allowed at all.
+    """
+
+    development_id: UUID
+    name: str
+    lots_total: int
+    lots_by_status: Dict[str, int]
+    contracts_total: int
+    active_contracts: int
+    invoices_total: int
+    paid_invoices: int
+    can_delete: bool
+    blocked_reason: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Lot
 # ---------------------------------------------------------------------------
+
+class LotDeletePreview(BaseModel):
+    """What an admin is about to wipe out when deleting a single lot."""
+
+    lot_id: UUID
+    lot_number: str
+    block: Optional[str] = None
+    contracts_total: int
+    active_contracts: int
+    invoices_total: int
+    paid_invoices: int
+    can_delete: bool
+    blocked_reason: Optional[str] = None
+
 
 class LotCreate(BaseModel):
     """Payload for creating a lot."""

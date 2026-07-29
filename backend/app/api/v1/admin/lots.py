@@ -10,7 +10,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -37,12 +37,14 @@ from app.schemas.financial_settings import ClientLotFinancialUpdate, rate_to_per
 from app.schemas.lot import (
     ClientLotResponse,
     DevelopmentCreate,
+    DevelopmentDeletePreview,
     DevelopmentFilter,
     DevelopmentResponse,
     DevelopmentUpdate,
     EffectiveRatesResponse,
     LotAssignRequest,
     LotCreate,
+    LotDeletePreview,
     LotResponse,
     LotUpdate,
     PaymentPlanPreviewRequest,
@@ -299,6 +301,74 @@ async def _get_owned_development(db: AsyncSession, dev_id: UUID, company_id: UUI
     return dev
 
 
+def _enum_key(value) -> str:
+    """Normalize an enum column value (enum member or raw string) to its name."""
+    return value.value if hasattr(value, "value") else str(value)
+
+
+async def _development_delete_stats(db: AsyncSession, dev_id: UUID, company_id: UUID) -> dict:
+    """Count everything the deletion cascade would remove for a development.
+
+    Used both by the confirmation preview and by the delete endpoint itself, so
+    the dialog and the actual rule can never drift apart.
+    """
+    lot_rows = (await db.execute(
+        select(Lot.status, func.count())
+        .where(Lot.development_id == dev_id, Lot.company_id == company_id)
+        .group_by(Lot.status)
+    )).all()
+    lots_by_status = {_enum_key(st): int(n) for st, n in lot_rows}
+
+    contract_rows = (await db.execute(
+        select(ClientLot.status, func.count())
+        .join(Lot, Lot.id == ClientLot.lot_id)
+        .where(Lot.development_id == dev_id, Lot.company_id == company_id)
+        .group_by(ClientLot.status)
+    )).all()
+    contracts_by_status = {_enum_key(st): int(n) for st, n in contract_rows}
+
+    invoice_rows = (await db.execute(
+        select(Invoice.status, func.count())
+        .join(ClientLot, ClientLot.id == Invoice.client_lot_id)
+        .join(Lot, Lot.id == ClientLot.lot_id)
+        .where(Lot.development_id == dev_id, Lot.company_id == company_id)
+        .group_by(Invoice.status)
+    )).all()
+    invoices_by_status = {_enum_key(st): int(n) for st, n in invoice_rows}
+
+    sold_lots = lots_by_status.get(LotStatus.SOLD.value, 0)
+    active_contracts = contracts_by_status.get(ClientLotStatus.ACTIVE.value, 0)
+
+    blocked_reason = None
+    if sold_lots or active_contracts:
+        blocked_reason = (
+            "Não é possível excluir: o empreendimento possui lote(s) vendido(s) com contrato ativo."
+        )
+
+    return {
+        "lots_by_status": lots_by_status,
+        "lots_total": sum(lots_by_status.values()),
+        "contracts_total": sum(contracts_by_status.values()),
+        "active_contracts": active_contracts,
+        "invoices_total": sum(invoices_by_status.values()),
+        "paid_invoices": invoices_by_status.get(InvoiceStatus.PAID.value, 0),
+        "can_delete": blocked_reason is None,
+        "blocked_reason": blocked_reason,
+    }
+
+
+@dev_router.get("/{dev_id}/delete-preview", response_model=DevelopmentDeletePreview)
+async def preview_delete_development(
+    dev_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Summary of what deleting this development would erase (confirmation step)."""
+    dev = await _get_owned_development(db, dev_id, admin.company_id)
+    stats = await _development_delete_stats(db, dev_id, admin.company_id)
+    return DevelopmentDeletePreview(development_id=dev_id, name=dev.name, **stats)
+
+
 @dev_router.post("/{dev_id}/photos", response_model=DevelopmentResponse, status_code=status.HTTP_201_CREATED)
 async def add_development_photo(
     dev_id: UUID,
@@ -347,30 +417,40 @@ async def delete_development(
     """
     dev = await _get_owned_development(db, dev_id, admin.company_id)
 
-    # Check for SOLD lots — those have active contracts and cannot be removed
-    sold = (await db.execute(
-        select(Lot).where(
-            Lot.development_id == dev_id,
-            Lot.status == LotStatus.SOLD,
-            Lot.company_id == admin.company_id,
-        )
-    )).scalars().first()
-    if sold:
-        raise HTTPException(
-            status_code=400,
-            detail="Não é possível excluir: o empreendimento possui lote(s) vendido(s) com contrato ativo.",
-        )
+    # Mesma regra exibida no /delete-preview: lote vendido ou contrato ativo
+    # (mesmo em lote com status dessincronizado) bloqueia a exclusão, senão o
+    # cascade apagaria histórico financeiro vivo.
+    stats = await _development_delete_stats(db, dev_id, admin.company_id)
+    if not stats["can_delete"]:
+        raise HTTPException(status_code=400, detail=stats["blocked_reason"])
 
     await log_audit(
         db, user_id=admin.id, company_id=admin.company_id,
         table_name="developments", operation="DELETE",
         resource_id=str(dev_id),
-        detail=f"Empreendimento '{dev.name}' excluído.",
+        detail=(
+            f"Empreendimento '{dev.name}' excluído. "
+            f"{stats['lots_total']} lote(s), {stats['contracts_total']} contrato(s) e "
+            f"{stats['invoices_total']} fatura(s) removidos em cascata."
+        ),
         ip_address=request.client.host if request.client else None,
     )
 
-    await db.delete(dev)
-    await db.flush()
+    # Apaga os lotes por comando explícito antes do empreendimento. Um
+    # db.delete(dev) faria o ORM tentar setar lots.development_id = NULL (a
+    # relationship não tem cascade), e a coluna é NOT NULL → IntegrityError/500.
+    # O que estiver abaixo dos lotes (client_lots, invoices, boletos) cai pelo
+    # ON DELETE CASCADE das FKs.
+    await db.execute(sa_delete(Lot).where(Lot.development_id == dev_id))
+    await db.execute(sa_delete(Development).where(Development.id == dev_id))
+
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível excluir: existem registros vinculados a este empreendimento.",
+        ) from exc
     return None
 
 
@@ -517,6 +597,57 @@ async def _get_owned_lot(db: AsyncSession, lot_id: UUID, company_id: UUID) -> Lo
     return lot
 
 
+async def _lot_delete_stats(db: AsyncSession, lot_id: UUID, company_id: UUID) -> dict:
+    """Count everything the deletion cascade would remove for a single lot.
+
+    Shared by the confirmation preview and the delete endpoint so the dialog and
+    the enforced rule can never drift apart.
+    """
+    contract_rows = (await db.execute(
+        select(ClientLot.status, func.count())
+        .where(ClientLot.lot_id == lot_id, ClientLot.company_id == company_id)
+        .group_by(ClientLot.status)
+    )).all()
+    contracts_by_status = {_enum_key(st): int(n) for st, n in contract_rows}
+
+    invoice_rows = (await db.execute(
+        select(Invoice.status, func.count())
+        .join(ClientLot, ClientLot.id == Invoice.client_lot_id)
+        .where(ClientLot.lot_id == lot_id, ClientLot.company_id == company_id)
+        .group_by(Invoice.status)
+    )).all()
+    invoices_by_status = {_enum_key(st): int(n) for st, n in invoice_rows}
+
+    active_contracts = contracts_by_status.get(ClientLotStatus.ACTIVE.value, 0)
+    blocked_reason = (
+        "Não é possível excluir um lote vendido com contrato ativo."
+        if active_contracts else None
+    )
+
+    return {
+        "contracts_total": sum(contracts_by_status.values()),
+        "active_contracts": active_contracts,
+        "invoices_total": sum(invoices_by_status.values()),
+        "paid_invoices": invoices_by_status.get(InvoiceStatus.PAID.value, 0),
+        "can_delete": blocked_reason is None,
+        "blocked_reason": blocked_reason,
+    }
+
+
+@router.get("/{lot_id}/delete-preview", response_model=LotDeletePreview)
+async def preview_delete_lot(
+    lot_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("manage_lots")),
+):
+    """Summary of what deleting this lot would erase (confirmation step)."""
+    lot = await _get_owned_lot(db, lot_id, admin.company_id)
+    stats = await _lot_delete_stats(db, lot_id, admin.company_id)
+    return LotDeletePreview(
+        lot_id=lot_id, lot_number=lot.lot_number, block=lot.block, **stats
+    )
+
+
 @router.post("/{lot_id}/photos", response_model=LotResponse, status_code=status.HTTP_201_CREATED)
 async def add_lot_photo(
     lot_id: UUID,
@@ -581,28 +712,35 @@ async def delete_lot(
     """
     lot = await _get_owned_lot(db, lot_id, admin.company_id)
 
-    active_contract = (await db.execute(
-        select(ClientLot).where(
-            ClientLot.lot_id == lot_id,
-            ClientLot.status == ClientLotStatus.ACTIVE,
-        )
-    )).scalar_one_or_none()
-    if active_contract:
-        raise HTTPException(
-            status_code=400,
-            detail="Não é possível excluir um lote vendido com contrato ativo.",
-        )
+    # Mesma regra exibida no /delete-preview.
+    stats = await _lot_delete_stats(db, lot_id, admin.company_id)
+    if not stats["can_delete"]:
+        raise HTTPException(status_code=400, detail=stats["blocked_reason"])
 
     await log_audit(
         db, user_id=admin.id, company_id=admin.company_id,
         table_name="lots", operation="DELETE",
         resource_id=str(lot_id),
-        detail=f"Lote {lot.lot_number} (quadra {lot.block}) excluído.",
+        detail=(
+            f"Lote {lot.lot_number} (quadra {lot.block}) excluído. "
+            f"{stats['contracts_total']} contrato(s) e {stats['invoices_total']} "
+            f"fatura(s) removidos em cascata."
+        ),
         ip_address=request.client.host if request.client else None,
     )
 
-    await db.delete(lot)
-    await db.flush()
+    # Mesmo motivo do delete_development: client_lots.lot_id é NOT NULL e a
+    # relationship não tem cascade, então o ORM tentaria nulificar a FK.
+    await db.execute(sa_delete(ClientLot).where(ClientLot.lot_id == lot_id))
+    await db.execute(sa_delete(Lot).where(Lot.id == lot_id))
+
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível excluir: existem registros vinculados a este lote.",
+        ) from exc
     return None
 
 
