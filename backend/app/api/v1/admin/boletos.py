@@ -12,7 +12,7 @@ from typing import Optional
 from uuid import UUID
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -31,6 +31,8 @@ from app.schemas.boleto import (
     BoletoUpdateRequest,
     ManualWriteoffRequest,
 )
+from app.services import sicredi_service
+from app.services.sicredi.exceptions import SicrediError
 from app.services.admin_notify_service import notify_admins
 from app.models.enums import NotificationType
 from app.utils.logging import get_logger
@@ -52,41 +54,52 @@ async def list_boletos(
     status: Optional[str] = Query(None, description="Filter by status: NORMAL, LIQUIDADO, VENCIDO, CANCELADO"),
     data_vencimento_inicio: Optional[date] = Query(None, description="Filter by due date start (YYYY-MM-DD)"),
     data_vencimento_fim: Optional[date] = Query(None, description="Filter by due date end (YYYY-MM-DD)"),
+    data_inicio: Optional[date] = Query(None, description="Alias of data_vencimento_inicio (frontend)"),
+    data_fim: Optional[date] = Query(None, description="Alias of data_vencimento_fim (frontend)"),
     seu_numero: Optional[str] = Query(None, description="Search by seu_numero (internal control number)"),
+    search: Optional[str] = Query(None, description="Search by seu_numero / nosso_numero (frontend)"),
     tag: Optional[str] = Query(None, description="Filter by tag: ENTRADA_PARCELADA, PARCELA_CONTRATO, SERVICO_AVULSO, SEGUNDA_VIA, RENEGOCIACAO"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
     """List all boletos with optional filters."""
-    
+
+    # Accept both the original param names and the aliases the frontend sends.
+    due_start = data_vencimento_inicio or data_inicio
+    due_end = data_vencimento_fim or data_fim
+    search_term = search or seu_numero
+
     stmt = select(Boleto).where(Boleto.company_id == admin.company_id)
-    
+
     if client_id:
         stmt = stmt.where(Boleto.client_id == client_id)
-    
+
     if tag:
         try:
             tag_enum = BoletoTag(tag.upper())
             stmt = stmt.where(Boleto.tag == tag_enum)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid tag: {tag}")
-    
+
     if status:
         try:
             status_enum = BoletoStatus(status.upper())
             stmt = stmt.where(Boleto.status == status_enum)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
-    
-    if data_vencimento_inicio:
-        stmt = stmt.where(Boleto.data_vencimento >= data_vencimento_inicio)
-    
-    if data_vencimento_fim:
-        stmt = stmt.where(Boleto.data_vencimento <= data_vencimento_fim)
-    
-    if seu_numero:
-        stmt = stmt.where(Boleto.seu_numero.ilike(f"%{seu_numero}%"))
-    
+
+    if due_start:
+        stmt = stmt.where(Boleto.data_vencimento >= due_start)
+
+    if due_end:
+        stmt = stmt.where(Boleto.data_vencimento <= due_end)
+
+    if search_term:
+        term = f"%{search_term.strip()}%"
+        stmt = stmt.where(
+            or_(Boleto.seu_numero.ilike(term), Boleto.nosso_numero.ilike(term))
+        )
+
     stmt = stmt.options(selectinload(Boleto.client))
     stmt = stmt.order_by(Boleto.created_at.desc())
     stmt = stmt.limit(limit).offset(offset)
@@ -127,6 +140,104 @@ async def list_boletos(
         response.append(BoletoWithClientResponse(**boleto_dict))
     
     return response
+
+
+@router.get("/lote-pdf")
+async def download_boletos_lote_pdf(
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("view_financial")),
+    client_id: Optional[UUID] = Query(None, description="Filter by client UUID"),
+    status: Optional[str] = Query(None, description="Filter by status (e.g. NORMAL, VENCIDO)"),
+    data_inicio: Optional[date] = Query(None, description="Due date start (YYYY-MM-DD)"),
+    data_fim: Optional[date] = Query(None, description="Due date end (YYYY-MM-DD)"),
+    search: Optional[str] = Query(None, description="Search by seu_numero / nosso_numero"),
+    tag: Optional[str] = Query(None, description="Filter by tag"),
+):
+    """Download every boleto matching the current filters as a single merged PDF.
+
+    Honors the same filters the boleto list ("central de boletos") uses so the
+    file contains exactly the boletos the user is looking at (e.g. only "abertos").
+    Fetches each boleto's PDF from Sicredi and concatenates them into one file.
+    """
+    import asyncio
+    import io
+
+    from pypdf import PdfReader, PdfWriter
+
+    MAX_LOTE = 100
+
+    stmt = select(Boleto).where(Boleto.company_id == admin.company_id)
+
+    if client_id:
+        stmt = stmt.where(Boleto.client_id == client_id)
+
+    if tag:
+        try:
+            stmt = stmt.where(Boleto.tag == BoletoTag(tag.upper()))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid tag: {tag}")
+
+    if status:
+        try:
+            stmt = stmt.where(Boleto.status == BoletoStatus(status.upper()))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+
+    if data_inicio:
+        stmt = stmt.where(Boleto.data_vencimento >= data_inicio)
+
+    if data_fim:
+        stmt = stmt.where(Boleto.data_vencimento <= data_fim)
+
+    if search:
+        term = f"%{search.strip()}%"
+        stmt = stmt.where(
+            or_(Boleto.seu_numero.ilike(term), Boleto.nosso_numero.ilike(term))
+        )
+
+    stmt = stmt.order_by(Boleto.data_vencimento.asc())
+
+    result = await db.execute(stmt)
+    boletos = [b for b in result.scalars().all() if b.linha_digitavel]
+
+    if not boletos:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum boleto com linha digitável encontrado para os filtros selecionados.",
+        )
+    if len(boletos) > MAX_LOTE:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{len(boletos)} boletos correspondem aos filtros. "
+                f"Refine os filtros para até {MAX_LOTE} boletos por download."
+            ),
+        )
+
+    client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+
+    writer = PdfWriter()
+    try:
+        for idx, boleto in enumerate(boletos):
+            pdf_bytes = await client.boletos.gerar_pdf(boleto.linha_digitavel)
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages:
+                writer.add_page(page)
+            # Rate limiting: small pause between Sicredi API calls
+            if idx < len(boletos) - 1:
+                await asyncio.sleep(0.3)
+        await sicredi_service.persist_token_cache(db, admin.company_id)
+    except SicrediError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
+
+    output = io.BytesIO()
+    writer.write(output)
+
+    return Response(
+        content=output.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=boletos_lote.pdf"},
+    )
 
 
 @router.get("/stats")

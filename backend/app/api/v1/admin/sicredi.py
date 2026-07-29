@@ -777,25 +777,130 @@ async def consultar_boleto(
 
 @router.post("/boletos/sync-all")
 async def sync_all_boletos(
+    db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("manage_sicredi")),
 ):
-    """Trigger an on-demand reconciliation of the company's open boletos.
+    """Reconcile all open boletos with Sicredi on demand and return a summary.
 
-    Enqueues the same Celery job the scheduler runs (so it can't time out the
-    HTTP request while querying dozens of boletos) and returns immediately. The
-    frontend then polls the audit trail for the resulting SYNC_RUN event, which
-    carries the overview (checked / updated / errors, with sample error
-    messages). Requires the Celery worker to be running.
+    Runs entirely in the web process (no Celery worker dependency) so it works
+    even when background jobs aren't running, and queries the boletos
+    concurrently so dozens of them finish in seconds instead of timing out the
+    request. Returns checked / updated / errors with sample error messages, and
+    records a single SYNC_RUN audit event.
     """
-    from app.tasks.sicredi_sync_tasks import sync_boletos_for_company
+    import asyncio
 
-    sync_boletos_for_company.delay(str(admin.company_id))
+    from app.services.boleto_status_service import mark_boleto_liquidado
+    from app.services.sicredi.audit_recorder import pause_recording, resume_recording
+    from app.services.sicredi.exceptions import SicrediError
+    from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
+    from app.tasks.sicredi_sync_tasks import _SITUACAO_MAP
 
-    logger.info("sicredi_sync_all_enqueued", company_id=str(admin.company_id))
-    return {
-        "status": "started",
-        "started_at": datetime.now(timezone.utc).isoformat(),
+    _CONCURRENCY = 6
+    _PER_CALL_TIMEOUT = 8  # seconds; bounds a single hung consulta
+
+    sicredi_client = await sicredi_service.get_sicredi_client(db, admin.company_id)
+
+    open_boletos = (await db.execute(
+        select(Boleto).where(
+            Boleto.company_id == admin.company_id,
+            Boleto.status.in_([BoletoStatus.NORMAL, BoletoStatus.VENCIDO]),
+            Boleto.nosso_numero.isnot(None),
+        ).limit(200)
+    )).scalars().all()
+
+    # Phase 1: query Sicredi concurrently (network only — no DB writes here, so
+    # the shared AsyncSession is never touched by parallel coroutines).
+    sem = asyncio.Semaphore(_CONCURRENCY)
+
+    async def _fetch(boleto):
+        async with sem:
+            try:
+                data = await asyncio.wait_for(
+                    sicredi_client.boletos.consultar_por_nosso_numero(boleto.nosso_numero),
+                    timeout=_PER_CALL_TIMEOUT,
+                )
+                return boleto, data, None
+            except asyncio.TimeoutError:
+                return boleto, None, "timeout ao consultar o Sicredi"
+            except SicrediError as exc:
+                status_code = getattr(exc, "status_code", None)
+                detail = str(exc.detail or exc)
+                return boleto, None, f"HTTP {status_code}: {detail}" if status_code else detail
+
+    # Don't flood the audit trail with one CONSULTA row per boleto; we emit a
+    # single SYNC_RUN summary below.
+    audit_pause = pause_recording()
+    try:
+        results = await asyncio.gather(*[_fetch(b) for b in open_boletos])
+    finally:
+        resume_recording(audit_pause)
+
+    # Phase 2: apply status changes sequentially on the request session.
+    updated = 0
+    consult_errors = 0
+    unknown_situacoes: set = set()
+    error_samples: dict = {}
+
+    for boleto, data, err in results:
+        if err is not None:
+            consult_errors += 1
+            if err not in error_samples and len(error_samples) < 5:
+                error_samples[err] = boleto.nosso_numero
+            continue
+
+        situacao = (data.situacao or "").upper()
+        mapped = _SITUACAO_MAP.get(situacao)
+        if not mapped:
+            if situacao:
+                unknown_situacoes.add(situacao)
+            continue
+        new_status = BoletoStatus(mapped)
+        if new_status == boleto.status:
+            continue
+
+        if new_status == BoletoStatus.LIQUIDADO:
+            await mark_boleto_liquidado(db, boleto, source="sync_all_endpoint")
+        else:
+            boleto.status = new_status
+            if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
+                if boleto.writeoff_type != WriteoffType.MANUAL_ADMIN:
+                    boleto.writeoff_type = WriteoffType.BAIXA_EXTERNA
+                    boleto.writeoff_reason = (
+                        f"Baixa externa via Sicredi (situacao: {data.situacao}). "
+                        "Sincronizado manualmente."
+                    )
+        updated += 1
+
+    summary = {
+        "checked": len(open_boletos),
+        "updated": updated,
+        "consult_errors": consult_errors,
+        "unknown_situacoes": sorted(unknown_situacoes),
+        "error_samples": [
+            {"error": k, "nosso_numero": v} for k, v in error_samples.items()
+        ],
     }
+
+    await log_sicredi_event(
+        db,
+        direction=DIRECTION_OUTBOUND,
+        event_type="SYNC_RUN",
+        company_id=admin.company_id,
+        success=True,
+        payload=summary,
+    )
+    await sicredi_service.persist_token_cache(db, admin.company_id)
+    await db.commit()
+
+    logger.info(
+        "sicredi_sync_all",
+        company_id=str(admin.company_id),
+        checked=summary["checked"],
+        updated=summary["updated"],
+        consult_errors=summary["consult_errors"],
+    )
+    return summary
 
 
 @router.post("/boletos/{nosso_numero}/sync")
