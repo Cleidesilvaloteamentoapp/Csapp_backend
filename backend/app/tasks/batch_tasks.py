@@ -70,6 +70,31 @@ def _format_fee_instructions(input_data: dict) -> list[str]:
     return lines
 
 
+def _format_fee_lines_from_rates(penalty_rate, daily_interest_rate) -> list[str]:
+    """Build fee instruction lines from stored fractional rates (0.02 -> 2%).
+
+    Used as a fallback when the batch didn't carry explicit multa/juros: the
+    company's configured rates (cadastro / financial settings) still inform the
+    payer and the receiving bank of the late-fee policy. The daily interest is
+    expressed per month (rate * 30) to match how boletos usually state it.
+    """
+    lines: list[str] = []
+    try:
+        p = float(penalty_rate) if penalty_rate is not None else 0.0
+    except (TypeError, ValueError):
+        p = 0.0
+    try:
+        d = float(daily_interest_rate) if daily_interest_rate is not None else 0.0
+    except (TypeError, ValueError):
+        d = 0.0
+
+    if p > 0:
+        lines.append(f"Após o vencimento, multa de {_fmt_num(p * 100)}%.")
+    if d > 0:
+        lines.append(f"Juros de mora de {_fmt_num(d * 30 * 100)}% ao mês.")
+    return lines
+
+
 def _clamp_negativacao(days: int | None) -> int | None:
     """Return None if days is outside the Sicredi-accepted range [3, 99]."""
     if days is None:
@@ -217,6 +242,28 @@ async def _process_batch_creation_async(
         # so the receiving bank and the payer see the penalties in text. Combine with
         # any user-provided lines, respecting Sicredi limits (mensagens: 4, informativos: 5).
         fee_lines = _format_fee_instructions(input_data)
+        if not fee_lines:
+            # The batch carried no explicit multa/juros: fall back to the company's
+            # configured financial settings (cadastro) so the boleto still informs
+            # the late-fee policy. Mirrors the rates used for segunda-via correction.
+            from app.services.financial_defaults_service import (
+                HARDCODED_DAILY_INTEREST_RATE,
+                HARDCODED_PENALTY_RATE,
+                get_company_settings,
+            )
+
+            cfs = await get_company_settings(db, cid)
+            penalty = (
+                cfs.penalty_rate
+                if cfs and cfs.penalty_rate is not None
+                else HARDCODED_PENALTY_RATE
+            )
+            daily = (
+                cfs.daily_interest_rate
+                if cfs and cfs.daily_interest_rate is not None
+                else HARDCODED_DAILY_INTEREST_RATE
+            )
+            fee_lines = _format_fee_lines_from_rates(penalty, daily)
         mensagens = ((input_data.get("mensagens") or []) + fee_lines)[:4]
         informativos = ((input_data.get("informativos") or []) + fee_lines)[:5]
 
