@@ -13,6 +13,8 @@ Both write an OUTBOUND audit event per run so admins can SEE in the frontend
 that reconciliation is actually running (which also proves beat+worker are up).
 """
 
+import asyncio
+
 from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
@@ -70,18 +72,28 @@ async def _sync_open_boletos_async(session_factory: TaskSessionFactory):
             updated = 0
             consult_errors = 0
             unknown_situacoes: set[str] = set()
+            error_samples: dict[str, str] = {}  # detail -> first nosso_numero that hit it
 
-            for boleto in open_boletos:
+            for idx, boleto in enumerate(open_boletos):
+                # Space out calls so Sicredi doesn't rate-limit the whole run.
+                if idx > 0:
+                    await asyncio.sleep(0.35)
                 try:
                     data = await sicredi_client.boletos.consultar_por_nosso_numero(
                         boleto.nosso_numero
                     )
                 except SicrediError as exc:
                     consult_errors += 1
+                    detail = str(exc.detail or exc)
+                    status_code = getattr(exc, "status_code", None)
+                    key = f"HTTP {status_code}: {detail}" if status_code else detail
+                    if key not in error_samples and len(error_samples) < 5:
+                        error_samples[key] = boleto.nosso_numero
                     logger.warning(
                         "sicredi_sync_consult_failed",
                         nosso_numero=boleto.nosso_numero,
-                        error=str(exc.detail or exc),
+                        status_code=status_code,
+                        error=detail,
                     )
                     continue
 
@@ -122,6 +134,11 @@ async def _sync_open_boletos_async(session_factory: TaskSessionFactory):
                     "updated": updated,
                     "consult_errors": consult_errors,
                     "unknown_situacoes": sorted(unknown_situacoes),
+                    # Distinct error messages (with an example boleto) so the cause
+                    # of a full-run failure is visible on the audit page.
+                    "error_samples": [
+                        {"error": k, "nosso_numero": v} for k, v in error_samples.items()
+                    ],
                 },
             )
 
