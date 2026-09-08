@@ -8,6 +8,7 @@ This service handles:
 - CRUD operations for credential management
 """
 
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -24,6 +25,44 @@ logger = get_logger(__name__)
 
 # In-memory client cache keyed by credential ID to reuse token state
 _client_cache: dict[UUID, SicrediClient] = {}
+# Connection fields the cached client was built from, so a credential edited by
+# another process (web / worker / beat each hold their own cache) doesn't leave
+# this one calling Sicredi with the old key forever.
+_client_signatures: dict[UUID, tuple] = {}
+
+
+def _signature(cred: SicrediCredential) -> tuple:
+    return (
+        cred.x_api_key,
+        cred.username,
+        cred.password,
+        cred.cooperativa,
+        cred.posto,
+        cred.codigo_beneficiario,
+        cred.environment,
+    )
+
+
+def _adopt_db_tokens(credentials: SicrediCredentials, cred: SicrediCredential) -> None:
+    """Take the stored token over the in-memory one when it lives longer.
+
+    web, worker and beat are separate processes with separate caches. Without
+    this each of them keeps burning ``grant_type=password`` calls instead of
+    reusing the token a sibling process just persisted.
+    """
+    if not cred.access_token or not cred.token_expires_at:
+        return
+    db_expiry = cred.token_expires_at.timestamp()
+    if db_expiry <= time.time():
+        return
+    if db_expiry <= (credentials._token_expires_at or 0):
+        return
+    credentials._access_token = cred.access_token
+    credentials._refresh_token = cred.refresh_token
+    credentials._token_expires_at = db_expiry
+    credentials._refresh_expires_at = (
+        cred.refresh_expires_at.timestamp() if cred.refresh_expires_at else None
+    )
 
 
 async def get_sicredi_client(db: AsyncSession, company_id: UUID) -> SicrediClient:
@@ -55,10 +94,12 @@ async def get_sicredi_client(db: AsyncSession, company_id: UUID) -> SicrediClien
             detail=f"No active Sicredi credentials found for company {company_id}",
         )
 
-    # Reuse cached client if credential ID matches
-    if cred.id in _client_cache:
+    # Reuse the cached client while it still matches the stored credential.
+    signature = _signature(cred)
+    if cred.id in _client_cache and _client_signatures.get(cred.id) == signature:
         cached = _client_cache[cred.id]
         cached.company_id = company_id
+        _adopt_db_tokens(cached.credentials, cred)
         return cached
 
     env = SicrediEnvironment(cred.environment) if cred.environment in ("sandbox", "production") else SicrediEnvironment.PRODUCTION
@@ -83,6 +124,7 @@ async def get_sicredi_client(db: AsyncSession, company_id: UUID) -> SicrediClien
     client = SicrediClient(credentials=credentials)
     client.company_id = company_id
     _client_cache[cred.id] = client
+    _client_signatures[cred.id] = signature
 
     logger.info("sicredi_client_loaded", company_id=str(company_id), credential_id=str(cred.id))
     return client
@@ -123,6 +165,7 @@ async def persist_token_cache(db: AsyncSession, company_id: UUID) -> None:
 def invalidate_client_cache(credential_id: UUID) -> None:
     """Remove a cached client (e.g. after credential update)."""
     _client_cache.pop(credential_id, None)
+    _client_signatures.pop(credential_id, None)
 
 
 # ---------------------------------------------------------------------------

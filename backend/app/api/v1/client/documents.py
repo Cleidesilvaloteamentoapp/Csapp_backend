@@ -21,7 +21,7 @@ from app.utils.exceptions import StorageError
 router = APIRouter(prefix="/documents", tags=["Client Documents"])
 
 ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/jpg"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
 async def _get_client(db: AsyncSession, user: Profile) -> Client:

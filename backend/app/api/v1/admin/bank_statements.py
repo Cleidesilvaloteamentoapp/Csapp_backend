@@ -52,8 +52,8 @@ async def upload_bank_statement(
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    if len(content) > 10 * 1024 * 1024:  # 10 MB limit
-        raise HTTPException(status_code=400, detail="File too large (max 10 MB)")
+    if len(content) > 100 * 1024 * 1024:  # 100 MB limit
+        raise HTTPException(status_code=400, detail="File too large (max 100 MB)")
 
     # Try to get the bank provider
     try:

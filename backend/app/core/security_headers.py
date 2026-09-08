@@ -4,7 +4,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

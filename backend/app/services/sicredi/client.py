@@ -28,6 +28,7 @@ from app.services.sicredi.exceptions import (
     SicrediTimeoutError,
     SicrediValidationError,
 )
+from app.services.sicredi.http import get_http_client
 from app.services.sicredi.webhooks import SicrediWebhooks
 from app.utils.logging import get_logger
 
@@ -115,15 +116,17 @@ class SicrediClient:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as http:
-                resp = await http.request(
-                    method=method,
-                    url=url,
-                    json=json,
-                    params=params,
-                    data=data,
-                    headers=headers,
-                )
+            # Pooled client: keeping the TLS connection alive across calls is what
+            # makes a few hundred consultas finish inside the sync's time budget.
+            resp = await get_http_client().request(
+                method=method,
+                url=url,
+                json=json,
+                params=params,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+            )
         except httpx.TimeoutException as exc:
             record_call(
                 company_id=self.company_id,
@@ -146,7 +149,9 @@ class SicrediClient:
         # Handle 401 with one automatic retry (record only the final leg below)
         if resp.status_code == 401 and retry_on_401:
             logger.warning("sicredi_401_retry", url=url)
-            self._auth.invalidate()
+            # Only drop the token this call actually used — a sibling request may
+            # already have rotated it while this one was in flight.
+            self._auth.invalidate(access_token)
             return await self.request(
                 method, url,
                 json=json, params=params, data=data,

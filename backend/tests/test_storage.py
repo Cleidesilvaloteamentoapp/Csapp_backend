@@ -28,9 +28,9 @@ def test_invalid_extension():
 
 
 def test_file_too_large():
-    """Files exceeding 10MB should raise StorageError."""
+    """Files exceeding 100MB should raise StorageError."""
     with pytest.raises(StorageError, match="maximum size"):
-        validate_file("big.pdf", 11 * 1024 * 1024)
+        validate_file("big.pdf", 101 * 1024 * 1024)
 
 
 def test_valid_docx():

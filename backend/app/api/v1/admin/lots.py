@@ -58,7 +58,7 @@ logger = get_logger(__name__)
 dev_router = APIRouter(prefix="/developments", tags=["Admin Developments"])
 
 ALLOWED_PHOTO_TYPES = {"image/jpeg", "image/png", "image/jpg", "image/webp", "image/gif"}
-MAX_PHOTO_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_PHOTO_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
 def _dev_response(dev: Development) -> dict:

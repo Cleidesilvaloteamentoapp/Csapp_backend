@@ -794,10 +794,13 @@ async def sync_all_boletos(
     from app.services.sicredi.audit_recorder import pause_recording, resume_recording
     from app.services.sicredi.exceptions import SicrediError
     from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
-    from app.tasks.sicredi_sync_tasks import _SITUACAO_MAP
+    from app.tasks.sicredi_sync_tasks import resolve_situacao
 
-    _CONCURRENCY = 6
-    _PER_CALL_TIMEOUT = 8  # seconds; bounds a single hung consulta
+    _CONCURRENCY = 4
+    # Generous per-call bound: the pooled HTTP connection removed the TLS
+    # handshake each consulta used to pay for, but Sicredi itself can still take
+    # a few seconds, and cutting it off at 8s turned slow answers into "erros".
+    _PER_CALL_TIMEOUT = 25
 
     sicredi_client = await sicredi_service.get_sicredi_client(db, admin.company_id)
 
@@ -806,7 +809,11 @@ async def sync_all_boletos(
             Boleto.company_id == admin.company_id,
             Boleto.status.in_([BoletoStatus.NORMAL, BoletoStatus.VENCIDO]),
             Boleto.nosso_numero.isnot(None),
-        ).limit(200)
+        )
+        # Oldest due date first: when the cap trims the run, the boletos most
+        # likely to have been paid are the ones that get checked.
+        .order_by(Boleto.data_vencimento.asc())
+        .limit(200)
     )).scalars().all()
 
     # Phase 1: query Sicredi concurrently (network only — no DB writes here, so
@@ -827,6 +834,10 @@ async def sync_all_boletos(
                 status_code = getattr(exc, "status_code", None)
                 detail = str(exc.detail or exc)
                 return boleto, None, f"HTTP {status_code}: {detail}" if status_code else detail
+            except Exception as exc:
+                # asyncio.gather would otherwise propagate and fail the whole
+                # request, hiding the boletos that did answer.
+                return boleto, None, f"{exc.__class__.__name__}: {exc}"
 
     # Don't flood the audit trail with one CONSULTA row per boleto; we emit a
     # single SYNC_RUN summary below.
@@ -849,10 +860,10 @@ async def sync_all_boletos(
                 error_samples[err] = boleto.nosso_numero
             continue
 
-        situacao = (data.situacao or "").upper()
-        mapped = _SITUACAO_MAP.get(situacao)
+        situacao = (data.situacao or "").strip().upper()
+        mapped, known = resolve_situacao(situacao)
         if not mapped:
-            if situacao:
+            if not known:
                 unknown_situacoes.add(situacao)
             continue
         new_status = BoletoStatus(mapped)
@@ -924,39 +935,41 @@ async def sync_boleto_status(
     except SicrediError as exc:
         raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
 
-    situacao = (sicredi_data.situacao or "").upper()
+    from app.tasks.sicredi_sync_tasks import resolve_situacao
 
-    _SITUACAO_MAP = {
-        "LIQUIDADO": BoletoStatus.LIQUIDADO,
-        "BAIXADO": BoletoStatus.CANCELADO,
-        "BAIXADO POR SOLICITACAO": BoletoStatus.CANCELADO,
-        "VENCIDO": BoletoStatus.VENCIDO,
-        "NEGATIVADO": BoletoStatus.NEGATIVADO,
-        "NORMAL": BoletoStatus.NORMAL,
-    }
-    new_status = _SITUACAO_MAP.get(situacao)
-    
+    situacao = (sicredi_data.situacao or "").strip().upper()
+    # Same mapping the scheduled reconciliation uses, so the two never drift.
+    mapped, known = resolve_situacao(situacao)
+    new_status = BoletoStatus(mapped) if mapped else None
+
     # Track if this is an external baixa (not from our platform)
     is_baixa_externa = situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO")
-    
+
     if not new_status:
-        # Record unknown situações so the mapping gap is visible in the audit trail
-        # instead of silently doing nothing.
-        await log_sicredi_event(
-            db,
-            direction=DIRECTION_OUTBOUND,
-            event_type="UNKNOWN_SITUACAO",
-            company_id=admin.company_id,
-            nosso_numero=nosso_numero,
-            success=True,
-            payload=sicredi_data.model_dump(mode="json"),
-        )
+        if not known:
+            # Record unknown situações so the mapping gap is visible in the audit
+            # trail instead of silently doing nothing.
+            await log_sicredi_event(
+                db,
+                direction=DIRECTION_OUTBOUND,
+                event_type="UNKNOWN_SITUACAO",
+                company_id=admin.company_id,
+                nosso_numero=nosso_numero,
+                success=True,
+                payload=sicredi_data.model_dump(mode="json"),
+            )
+        # Commit either way so the token refreshed by the consulta is persisted.
         await db.commit()
+        detail = (
+            f"Boleto em aberto no Sicredi (situacao: {sicredi_data.situacao}); nenhuma alteração."
+            if known
+            else f"Unknown situacao '{sicredi_data.situacao}'; no changes made."
+        )
         return {
             "status": "noop",
             "nosso_numero": nosso_numero,
             "sicredi_situacao": sicredi_data.situacao,
-            "detail": f"Unknown situacao '{sicredi_data.situacao}'; no changes made.",
+            "detail": detail,
         }
 
     stmt = select(Boleto).where(

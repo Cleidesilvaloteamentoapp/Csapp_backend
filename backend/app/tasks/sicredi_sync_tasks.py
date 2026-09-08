@@ -31,6 +31,36 @@ _SITUACAO_MAP = {
     "NORMAL": "NORMAL",
 }
 
+# Situações that just mean "still open at Sicredi". The consulta returns
+# "EM CARTEIRA" for every registered, unpaid boleto, so without this every
+# healthy boleto was reported back as an unmapped situação and the run looked
+# broken. They are a deliberate no-op: whether the title is merely open or
+# already past due is decided locally, not by this label.
+_SITUACAO_OPEN = frozenset({
+    "EM CARTEIRA",
+    "EM ABERTO",
+    "ABERTO",
+    "A VENCER",
+    "REGISTRADO",
+})
+
+
+def resolve_situacao(situacao: str) -> tuple[str | None, bool]:
+    """Map a Sicredi situação to a local status value.
+
+    Returns ``(status_value, known)``. ``status_value`` is None when nothing
+    should change; ``known`` is False only for labels we have never seen, which
+    are the ones worth surfacing to an admin.
+    """
+    normalized = (situacao or "").strip().upper()
+    if not normalized:
+        return None, True
+    if normalized in _SITUACAO_OPEN:
+        return None, True
+    mapped = _SITUACAO_MAP.get(normalized)
+    return mapped, mapped is not None
+
+
 # Max boletos reconciled per company per run, to bound Sicredi API usage.
 _MAX_PER_COMPANY = 200
 
@@ -58,6 +88,9 @@ async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: fl
             Boleto.status.in_([BoletoStatus.NORMAL, BoletoStatus.VENCIDO]),
             Boleto.nosso_numero.isnot(None),
         )
+        # Oldest due date first: when the cap trims the run, the boletos most
+        # likely to have been paid are the ones that get checked.
+        .order_by(Boleto.data_vencimento.asc())
         .limit(_MAX_PER_COMPANY)
     )).scalars().all()
 
@@ -74,10 +107,15 @@ async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: fl
             data = await sicredi_client.boletos.consultar_por_nosso_numero(
                 boleto.nosso_numero
             )
-        except SicrediError as exc:
+        except Exception as exc:
+            # Anything that isn't a SicrediError (a parsing slip, a dropped
+            # connection) used to abort the whole run and leave no SYNC_RUN
+            # behind, so the admin saw nothing at all. Count it and move on.
             consult_errors += 1
-            detail = str(exc.detail or exc)
+            detail = str(getattr(exc, "detail", None) or exc) or exc.__class__.__name__
             status_code = getattr(exc, "status_code", None)
+            if not isinstance(exc, SicrediError):
+                detail = f"{exc.__class__.__name__}: {detail}"
             key = f"HTTP {status_code}: {detail}" if status_code else detail
             if key not in error_samples and len(error_samples) < 5:
                 error_samples[key] = boleto.nosso_numero
@@ -89,10 +127,10 @@ async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: fl
             )
             continue
 
-        situacao = (data.situacao or "").upper()
-        mapped = _SITUACAO_MAP.get(situacao)
+        situacao = (data.situacao or "").strip().upper()
+        mapped, known = resolve_situacao(situacao)
         if not mapped:
-            if situacao:
+            if not known:
                 unknown_situacoes.add(situacao)
             continue
         new_status = BoletoStatus(mapped)
@@ -136,6 +174,31 @@ async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: fl
     return summary
 
 
+async def _log_sync_failure(db, company_id, message: str) -> None:
+    """Record a failed SYNC_RUN so the admin UI shows why nothing happened."""
+    from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
+
+    try:
+        await log_sicredi_event(
+            db,
+            direction=DIRECTION_OUTBOUND,
+            event_type="SYNC_RUN",
+            company_id=company_id,
+            success=False,
+            payload={
+                "checked": 0,
+                "updated": 0,
+                "consult_errors": 0,
+                "unknown_situacoes": [],
+                "error_samples": [{"error": message, "nosso_numero": ""}],
+            },
+        )
+        await db.commit()
+    except Exception:  # auditing must never mask the original failure
+        logger.warning("sicredi_sync_failure_audit_failed", company_id=str(company_id))
+        await db.rollback()
+
+
 async def _sync_open_boletos_async(session_factory: TaskSessionFactory):
     from sqlalchemy import select
 
@@ -153,13 +216,22 @@ async def _sync_open_boletos_async(session_factory: TaskSessionFactory):
                 sicredi_client = await sicredi_service.get_sicredi_client(db, cid)
             except Exception as exc:
                 logger.warning("sicredi_sync_no_client", company_id=str(cid), error=str(exc))
+                await db.rollback()
+                await _log_sync_failure(
+                    db, cid, f"Falha ao carregar credencial Sicredi: {exc}"
+                )
                 continue
 
-            summary = await sync_company_open_boletos(db, sicredi_client, cid)
-            total_synced += summary["updated"]
-
-            await sicredi_service.persist_token_cache(db, cid)
-            await db.commit()
+            try:
+                summary = await sync_company_open_boletos(db, sicredi_client, cid)
+                total_synced += summary["updated"]
+                await sicredi_service.persist_token_cache(db, cid)
+                await db.commit()
+            except Exception as exc:
+                # One tenant's failure must not take the whole scheduled run down.
+                logger.exception("sicredi_sync_company_failed", company_id=str(cid))
+                await db.rollback()
+                await _log_sync_failure(db, cid, f"Falha na sincronização: {exc}")
 
         logger.info("sicredi_sync_completed", total_synced=total_synced)
 
@@ -311,9 +383,14 @@ async def _sync_company_async(session_factory: TaskSessionFactory, company_id: s
             await db.commit()
             return
 
-        await sync_company_open_boletos(db, sicredi_client, cid)
-        await sicredi_service.persist_token_cache(db, cid)
-        await db.commit()
+        try:
+            await sync_company_open_boletos(db, sicredi_client, cid)
+            await sicredi_service.persist_token_cache(db, cid)
+            await db.commit()
+        except Exception as exc:
+            logger.exception("sicredi_sync_company_failed", company_id=str(cid))
+            await db.rollback()
+            await _log_sync_failure(db, cid, f"Falha na sincronização: {exc}")
 
 
 @celery.task(name="app.tasks.sicredi_sync_tasks.sync_open_boletos")
