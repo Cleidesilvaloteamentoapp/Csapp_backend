@@ -96,6 +96,7 @@ async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: fl
 
     updated = 0
     consult_errors = 0
+    write_errors = 0
     unknown_situacoes: set = set()
     error_samples: dict = {}  # error message -> first nosso_numero that hit it
 
@@ -137,23 +138,47 @@ async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: fl
         if new_status == boleto.status:
             continue
 
-        if new_status == BoletoStatus.LIQUIDADO:
-            await mark_boleto_liquidado(db, boleto, source="sync_open_boletos")
-        else:
-            boleto.status = new_status
-            if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
-                if boleto.writeoff_type != WriteoffType.MANUAL_ADMIN:
-                    boleto.writeoff_type = WriteoffType.BAIXA_EXTERNA
-                    boleto.writeoff_reason = (
-                        f"Baixa externa via Sicredi (situacao: {data.situacao}). "
-                        "Sincronizado por tarefa periódica."
-                    )
+        # Savepoint per boleto: one row the database refuses (a constraint, an
+        # enum value the type doesn't have yet) used to poison the session and
+        # take down the whole run, including the SYNC_RUN row that would have
+        # explained it.
+        try:
+            async with db.begin_nested():
+                if new_status == BoletoStatus.LIQUIDADO:
+                    await mark_boleto_liquidado(db, boleto, source="sync_open_boletos")
+                else:
+                    boleto.status = new_status
+                    if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
+                        if boleto.writeoff_type != WriteoffType.MANUAL_ADMIN:
+                            boleto.writeoff_type = WriteoffType.BAIXA_EXTERNA
+                            boleto.writeoff_reason = (
+                                f"Baixa externa via Sicredi (situacao: {data.situacao}). "
+                                "Sincronizado por tarefa periódica."
+                            )
+                    await db.flush()
+        except Exception as exc:
+            write_errors += 1
+            nosso_numero = boleto.nosso_numero
+            # Detach the rejected boleto so the commit at the end of the run
+            # doesn't replay the same failing UPDATE.
+            db.expunge(boleto)
+            key = f"Falha ao gravar {new_status.value}: {exc.__class__.__name__}: {exc}"
+            if key not in error_samples and len(error_samples) < 5:
+                error_samples[key] = nosso_numero
+            logger.warning(
+                "sicredi_sync_write_failed",
+                nosso_numero=nosso_numero,
+                new_status=new_status.value,
+                error=str(exc),
+            )
+            continue
         updated += 1
 
     summary = {
         "checked": len(open_boletos),
         "updated": updated,
         "consult_errors": consult_errors,
+        "write_errors": write_errors,
         "unknown_situacoes": sorted(unknown_situacoes),
         # Distinct error messages (with an example boleto) so the cause of a
         # full-run failure is visible on the audit page and in the sync dialog.
@@ -189,6 +214,7 @@ async def _log_sync_failure(db, company_id, message: str) -> None:
                 "checked": 0,
                 "updated": 0,
                 "consult_errors": 0,
+                "write_errors": 0,
                 "unknown_situacoes": [],
                 "error_samples": [{"error": message, "nosso_numero": ""}],
             },
@@ -376,6 +402,7 @@ async def _sync_company_async(session_factory: TaskSessionFactory, company_id: s
                     "checked": 0,
                     "updated": 0,
                     "consult_errors": 0,
+                    "write_errors": 0,
                     "unknown_situacoes": [],
                     "error_samples": [{"error": f"Falha ao carregar credencial Sicredi: {exc}", "nosso_numero": ""}],
                 },

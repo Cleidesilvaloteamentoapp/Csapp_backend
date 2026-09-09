@@ -850,6 +850,7 @@ async def sync_all_boletos(
     # Phase 2: apply status changes sequentially on the request session.
     updated = 0
     consult_errors = 0
+    write_errors = 0
     unknown_situacoes: set = set()
     error_samples: dict = {}
 
@@ -870,23 +871,46 @@ async def sync_all_boletos(
         if new_status == boleto.status:
             continue
 
-        if new_status == BoletoStatus.LIQUIDADO:
-            await mark_boleto_liquidado(db, boleto, source="sync_all_endpoint")
-        else:
-            boleto.status = new_status
-            if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
-                if boleto.writeoff_type != WriteoffType.MANUAL_ADMIN:
-                    boleto.writeoff_type = WriteoffType.BAIXA_EXTERNA
-                    boleto.writeoff_reason = (
-                        f"Baixa externa via Sicredi (situacao: {data.situacao}). "
-                        "Sincronizado manualmente."
-                    )
+        # Savepoint per boleto: a single row the database refuses (a constraint,
+        # an enum value the type doesn't carry yet) used to poison the session
+        # and turn the entire sync into a 500 with no summary at all.
+        try:
+            async with db.begin_nested():
+                if new_status == BoletoStatus.LIQUIDADO:
+                    await mark_boleto_liquidado(db, boleto, source="sync_all_endpoint")
+                else:
+                    boleto.status = new_status
+                    if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
+                        if boleto.writeoff_type != WriteoffType.MANUAL_ADMIN:
+                            boleto.writeoff_type = WriteoffType.BAIXA_EXTERNA
+                            boleto.writeoff_reason = (
+                                f"Baixa externa via Sicredi (situacao: {data.situacao}). "
+                                "Sincronizado manualmente."
+                            )
+                    await db.flush()
+        except Exception as exc:
+            write_errors += 1
+            nosso_numero = boleto.nosso_numero
+            # Detach the rejected boleto so the commit at the end of the request
+            # doesn't replay the same failing UPDATE and 500 anyway.
+            db.expunge(boleto)
+            key = f"Falha ao gravar {new_status.value}: {exc.__class__.__name__}: {exc}"
+            if key not in error_samples and len(error_samples) < 5:
+                error_samples[key] = nosso_numero
+            logger.warning(
+                "sicredi_sync_write_failed",
+                nosso_numero=nosso_numero,
+                new_status=new_status.value,
+                error=str(exc),
+            )
+            continue
         updated += 1
 
     summary = {
         "checked": len(open_boletos),
         "updated": updated,
         "consult_errors": consult_errors,
+        "write_errors": write_errors,
         "unknown_situacoes": sorted(unknown_situacoes),
         "error_samples": [
             {"error": k, "nosso_numero": v} for k, v in error_samples.items()
@@ -910,6 +934,7 @@ async def sync_all_boletos(
         checked=summary["checked"],
         updated=summary["updated"],
         consult_errors=summary["consult_errors"],
+        write_errors=summary["write_errors"],
     )
     return summary
 
