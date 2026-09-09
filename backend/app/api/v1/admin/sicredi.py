@@ -794,7 +794,7 @@ async def sync_all_boletos(
     from app.services.sicredi.audit_recorder import pause_recording, resume_recording
     from app.services.sicredi.exceptions import SicrediError
     from app.services.sicredi_audit_service import DIRECTION_OUTBOUND, log_sicredi_event
-    from app.tasks.sicredi_sync_tasks import resolve_situacao
+    from app.tasks.sicredi_sync_tasks import extract_liquidacao, resolve_situacao
 
     _CONCURRENCY = 4
     # Generous per-call bound: the pooled HTTP connection removed the TLS
@@ -877,7 +877,14 @@ async def sync_all_boletos(
         try:
             async with db.begin_nested():
                 if new_status == BoletoStatus.LIQUIDADO:
-                    await mark_boleto_liquidado(db, boleto, source="sync_all_endpoint")
+                    valor_liq, data_liq = extract_liquidacao(data)
+                    await mark_boleto_liquidado(
+                        db,
+                        boleto,
+                        valor=valor_liq,
+                        data_liquidacao=data_liq,
+                        source="sync_all_endpoint",
+                    )
                 else:
                     boleto.status = new_status
                     if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
@@ -960,7 +967,7 @@ async def sync_boleto_status(
     except SicrediError as exc:
         raise HTTPException(status_code=exc.status_code or 502, detail=exc.detail)
 
-    from app.tasks.sicredi_sync_tasks import resolve_situacao
+    from app.tasks.sicredi_sync_tasks import extract_liquidacao, resolve_situacao
 
     situacao = (sicredi_data.situacao or "").strip().upper()
     # Same mapping the scheduled reconciliation uses, so the two never drift.
@@ -1011,7 +1018,14 @@ async def sync_boleto_status(
     previous_writeoff_type = boleto_record.writeoff_type
 
     if new_status == BoletoStatus.LIQUIDADO:
-        await mark_boleto_liquidado(db, boleto_record, source="manual_sync")
+        valor_liq, data_liq = extract_liquidacao(sicredi_data)
+        await mark_boleto_liquidado(
+            db,
+            boleto_record,
+            valor=valor_liq,
+            data_liquidacao=data_liq,
+            source="manual_sync",
+        )
     else:
         boleto_record.status = new_status
         # Track external baixa - only mark if not already tracked as manual
@@ -1019,7 +1033,27 @@ async def sync_boleto_status(
             boleto_record.writeoff_type = WriteoffType.BAIXA_EXTERNA
             boleto_record.writeoff_reason = f"Baixa externa via Sicredi (situacao: {sicredi_data.situacao}). Sincronizado via endpoint /sync."
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        # Single-boleto action: whoever clicked should see why it failed instead
+        # of a bare 500. A write the database refuses here is almost always a
+        # schema gap (an enum value the type doesn't carry yet).
+        await db.rollback()
+        logger.warning(
+            "sicredi_boleto_sync_write_failed",
+            nosso_numero=nosso_numero,
+            new_status=new_status.value,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Sicredi respondeu '{sicredi_data.situacao}', mas o banco recusou "
+                f"a gravação de {new_status.value} ({exc.__class__.__name__}). "
+                "Verifique se há migração pendente."
+            ),
+        )
 
     logger.info(
         "sicredi_boleto_sync",

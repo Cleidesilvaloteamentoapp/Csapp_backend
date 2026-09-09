@@ -52,13 +52,69 @@ def resolve_situacao(situacao: str) -> tuple[str | None, bool]:
     should change; ``known`` is False only for labels we have never seen, which
     are the ones worth surfacing to an admin.
     """
-    normalized = (situacao or "").strip().upper()
+    normalized = " ".join((situacao or "").strip().upper().split())
     if not normalized:
         return None, True
     if normalized in _SITUACAO_OPEN:
         return None, True
     mapped = _SITUACAO_MAP.get(normalized)
-    return mapped, mapped is not None
+    if mapped:
+        return mapped, True
+    # Sicredi appends the settlement channel to the label. The webhook contract
+    # covers liquidações via Pix, Canais Sicredi (Rede), Outras Instituições
+    # (COMPE) and Cartório, and the consulta echoes those back as "LIQUIDADO
+    # COMPE", "LIQUIDADO CARTORIO" and so on. The docs give the situação list as
+    # an example, not an enumeration, so match the family: every member of it
+    # means the money arrived, whichever bank collected it.
+    if normalized.startswith("LIQUIDADO") and "PARCIAL" not in normalized:
+        return "LIQUIDADO", True
+    # BAIXADO is deliberately NOT matched by prefix. Cancelling a title stops
+    # the charge, so an unfamiliar write-off label must reach an admin instead
+    # of being guessed at.
+    return None, False
+
+
+# Sicredi spells the settlement date and amount differently per endpoint, and
+# ConsultaBoletoResponse keeps unknown fields (extra="allow"), so probe every
+# spelling seen — the same set reconcile_liquidados already reads.
+_DATA_LIQ_KEYS = ("dataLiquidacao", "dataPagamento", "dataEvento")
+_VALOR_LIQ_KEYS = ("valorLiquidacao", "valorPago")
+
+
+def extract_liquidacao(data):
+    """Return ``(valor, data_liquidacao)`` carried by a consulta response.
+
+    A payment made through another bank is only noticed on the next run, so
+    without this the boleto is recorded as settled *today* with no amount —
+    wrong in every report that groups receipts by payment date.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    from app.services.boleto_status_service import parse_sicredi_date
+
+    payload = data.model_dump() if hasattr(data, "model_dump") else dict(data or {})
+
+    valor = None
+    for key in _VALOR_LIQ_KEYS:
+        raw = payload.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            valor = Decimal(str(raw))
+        except (InvalidOperation, ValueError):
+            logger.warning("sicredi_valor_liquidacao_unparseable", value=str(raw)[:40])
+        break
+
+    data_liq = None
+    for key in _DATA_LIQ_KEYS:
+        raw = payload.get(key)
+        if not raw:
+            continue
+        data_liq = parse_sicredi_date(str(raw))
+        if data_liq:
+            break
+
+    return valor, data_liq
 
 
 # Max boletos reconciled per company per run, to bound Sicredi API usage.
@@ -145,7 +201,14 @@ async def sync_company_open_boletos(db, sicredi_client, company_id, *, delay: fl
         try:
             async with db.begin_nested():
                 if new_status == BoletoStatus.LIQUIDADO:
-                    await mark_boleto_liquidado(db, boleto, source="sync_open_boletos")
+                    valor_liq, data_liq = extract_liquidacao(data)
+                    await mark_boleto_liquidado(
+                        db,
+                        boleto,
+                        valor=valor_liq,
+                        data_liquidacao=data_liq,
+                        source="sync_open_boletos",
+                    )
                 else:
                     boleto.status = new_status
                     if situacao in ("BAIXADO", "BAIXADO POR SOLICITACAO"):
