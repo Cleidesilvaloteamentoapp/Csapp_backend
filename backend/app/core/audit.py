@@ -30,6 +30,7 @@ AUDITED_TABLES = frozenset({
     "contract_transfers",
     "early_payoff_requests",
     "whatsapp_credentials",
+    "company_branding",
 })
 
 

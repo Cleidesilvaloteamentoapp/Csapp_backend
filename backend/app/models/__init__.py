@@ -29,3 +29,4 @@ from app.models.company_financial_settings import CompanyFinancialSettings  # no
 from app.models.whatsapp_credential import WhatsAppCredential  # noqa: F401
 from app.models.staff_permission import StaffPermission  # noqa: F401
 from app.models.company_notification_settings import CompanyNotificationSettings  # noqa: F401
+from app.models.company_branding import CompanyBranding  # noqa: F401

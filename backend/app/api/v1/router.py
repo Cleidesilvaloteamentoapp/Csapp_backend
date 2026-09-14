@@ -3,7 +3,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, companies, webhooks_sicredi
+from app.api.v1 import auth, branding, companies, webhooks_sicredi
 from app.api.v1.admin import clients as admin_clients
 from app.api.v1.admin import contract_history as admin_contract_history
 from app.api.v1.admin import dashboard as admin_dashboard
@@ -47,6 +47,9 @@ api_router.include_router(auth.router)
 
 # Super admin
 api_router.include_router(companies.router)
+
+# Branding (read: any authenticated role + public by slug; write: company admin)
+api_router.include_router(branding.router)
 
 # Webhooks (public – validated internally)
 api_router.include_router(webhooks_sicredi.router)

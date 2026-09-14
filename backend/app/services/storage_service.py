@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 ALLOWED_EXTENSIONS = {
     "pdf", "jpg", "jpeg", "png", "gif", "webp",
     "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-    "txt", "csv", "zip", "rar",
+    "txt", "csv", "zip", "rar", "ico",
 }
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
 
