@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin
+from app.core.deps import get_company_admin, get_staff_user
+from app.models.enums import UserRole
 from app.models.user import Profile
 from app.schemas.staff import (
     StaffCreateRequest,
@@ -48,10 +49,26 @@ async def create_staff(
 @router.get("/{staff_id}", response_model=StaffResponse)
 async def get_staff(
     staff_id: uuid.UUID,
-    current_user: Profile = Depends(get_company_admin),
+    current_user: Profile = Depends(get_staff_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a staff member's details and permissions."""
+    """Get a staff member's details and permissions.
+
+    Admins may read any staff member in their company. A STAFF user may read
+    only their own record, which is how the frontend loads the granular
+    permissions of the logged-in user.
+    """
+    user_role = (
+        current_user.role.value
+        if hasattr(current_user.role, "value")
+        else current_user.role
+    )
+    if user_role == UserRole.STAFF.value and staff_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Staff users may only read their own record",
+        )
+
     try:
         profile = await staff_service.get_staff(staff_id, current_user.company_id, db)
         return StaffResponse.from_profile(profile)

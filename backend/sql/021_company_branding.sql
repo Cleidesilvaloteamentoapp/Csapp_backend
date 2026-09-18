@@ -1,6 +1,7 @@
 -- Migration 021: company_branding table + RLS
 -- Mirrors alembic/versions/018_company_branding.py
 -- Run after 020_writeoff_type_baixa_externa.sql
+-- Safe to re-run in the Supabase SQL Editor (idempotent).
 
 -- 1. Table
 CREATE TABLE IF NOT EXISTS company_branding (
@@ -39,6 +40,7 @@ CREATE INDEX IF NOT EXISTS ix_company_branding_company_id
 ALTER TABLE company_branding ENABLE ROW LEVEL SECURITY;
 
 -- COMPANY_ADMIN / SUPER_ADMIN: full CRUD on their company's branding
+DROP POLICY IF EXISTS company_branding_admin_all ON company_branding;
 CREATE POLICY company_branding_admin_all ON company_branding
     FOR ALL
     USING (
@@ -57,6 +59,7 @@ CREATE POLICY company_branding_admin_all ON company_branding
     );
 
 -- Every member of the company can read it: the client portal is branded too.
+DROP POLICY IF EXISTS company_branding_member_select ON company_branding;
 CREATE POLICY company_branding_member_select ON company_branding
     FOR SELECT
     USING (
