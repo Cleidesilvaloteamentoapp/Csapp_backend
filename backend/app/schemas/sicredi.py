@@ -12,6 +12,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.services.sicredi.fees import (
+    DESCONTO_PATTERN,
+    JUROS_PATTERN,
+    MULTA_PATTERN,
+)
 from app.utils.documents import is_valid_cpf_cnpj
 
 
@@ -143,16 +148,20 @@ class CriarBoletoAPIRequest(BaseModel):
     # Optional
     beneficiario_final: Optional[BeneficiarioFinalRequest] = None
     nosso_numero: Optional[int] = None
-    tipo_desconto: Optional[str] = None
+    tipo_desconto: Optional[str] = Field(None, pattern=DESCONTO_PATTERN)
     valor_desconto_1: Optional[Decimal] = None
     valor_desconto_2: Optional[Decimal] = None
     valor_desconto_3: Optional[Decimal] = None
     data_desconto_1: Optional[date] = None
     data_desconto_2: Optional[date] = None
     data_desconto_3: Optional[date] = None
-    tipo_juros: Optional[str] = None
+    tipo_juros: Optional[str] = Field(
+        None,
+        pattern=JUROS_PATTERN,
+        description="ISENTO | VALOR_DIA (R$/dia) | PERCENTUAL_MES | PERCENTUAL_DIA (convertido para %/mês)",
+    )
     juros: Optional[Decimal] = None
-    tipo_multa: Optional[str] = None
+    tipo_multa: Optional[str] = Field(None, pattern=MULTA_PATTERN)
     multa: Optional[Decimal] = None
     desconto_antecipado: Optional[Decimal] = None
     dias_protesto_auto: Optional[int] = None

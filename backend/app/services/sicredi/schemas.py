@@ -9,7 +9,13 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.sicredi.fees import (
+    normalize_desconto,
+    normalize_juros,
+    normalize_multa,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +103,31 @@ class CriarBoletoRequest(BaseModel):
     postarBoleto: Optional[str] = None
 
     model_config = ConfigDict(json_encoders={date: lambda v: v.isoformat(), Decimal: lambda v: float(v)})
+
+    @model_validator(mode="after")
+    def normalize_fee_vocabulary(self):
+        """Translate the app's fee vocabulary into the two words Sicredi accepts.
+
+        Single choke point for every caller (batch worker, admin endpoint, bank
+        adapter): Sicredi only understands VALOR and PERCENTUAL, and rejects the
+        whole request with HTTP 400 on anything else — before the boleto exists.
+        A dropped type also drops its paired amount, which Sicredi rejects on its
+        own. See app.services.sicredi.fees for the mapping.
+        """
+        self.tipoJuros, self.juros = normalize_juros(self.tipoJuros, self.juros)
+        self.tipoMulta, self.multa = normalize_multa(self.tipoMulta, self.multa)
+
+        self.tipoDesconto, self.valorDesconto1 = normalize_desconto(
+            self.tipoDesconto, self.valorDesconto1
+        )
+        if self.tipoDesconto is None:
+            self.valorDesconto2 = None
+            self.valorDesconto3 = None
+            self.dataDesconto1 = None
+            self.dataDesconto2 = None
+            self.dataDesconto3 = None
+
+        return self
 
     def to_api_payload(self) -> dict:
         """Convert to dict suitable for the Sicredi API, stripping None values."""

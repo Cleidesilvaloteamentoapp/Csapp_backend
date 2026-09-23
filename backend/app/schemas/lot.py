@@ -274,6 +274,16 @@ class LotAssignRequest(BaseModel):
         return rate_from_percent(v, max_percent=1)
 
 
+class EffectiveRatesResponse(BaseModel):
+    """Effective rates resolved per-lot → company → hardcoded, as percentages."""
+
+    penalty_rate: Decimal
+    daily_interest_rate: Decimal
+    adjustment_index: str
+    adjustment_frequency: str
+    adjustment_custom_rate: Decimal
+
+
 class ClientLotResponse(BaseModel):
     """ClientLot read response.
 
@@ -305,6 +315,12 @@ class ClientLotResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+    # Late-payment rules actually in force (per-lot -> company -> system default),
+    # as percentages. Populated by endpoints that resolve them; used to prefill
+    # the boleto/carne form so a contract's rules reach the bank as structured
+    # fields instead of being retyped by hand.
+    effective_rates: Optional[EffectiveRatesResponse] = None
 
     # Optional property context, populated by the client portal (my-lots).
     # Defaults keep admin endpoints (which validate a bare ClientLot) unaffected.
@@ -359,16 +375,6 @@ class PaymentPlanPreviewRequest(BaseModel):
     @classmethod
     def daily_percent_to_decimal(cls, v):
         return rate_from_percent(v, max_percent=1)
-
-
-class EffectiveRatesResponse(BaseModel):
-    """Effective rates resolved per-lot → company → hardcoded, as percentages."""
-
-    penalty_rate: Decimal
-    daily_interest_rate: Decimal
-    adjustment_index: str
-    adjustment_frequency: str
-    adjustment_custom_rate: Decimal
 
 
 class PaymentPlanPreviewResponse(BaseModel):

@@ -271,10 +271,11 @@ async def criar_boleto(
         dataDesconto1=payload.data_desconto_1,
         dataDesconto2=payload.data_desconto_2,
         dataDesconto3=payload.data_desconto_3,
-        # 'ISENTO' is not a valid Sicredi value; omit the field entirely.
-        tipoJuros=payload.tipo_juros if payload.tipo_juros and payload.tipo_juros.upper() != "ISENTO" else None,
+        # Fee types are translated to Sicredi's VALOR/PERCENTUAL vocabulary by
+        # CriarBoletoRequest itself (app.services.sicredi.fees).
+        tipoJuros=payload.tipo_juros,
         juros=payload.juros,
-        tipoMulta=payload.tipo_multa if payload.tipo_multa and payload.tipo_multa.upper() != "ISENTO" else None,
+        tipoMulta=payload.tipo_multa,
         multa=payload.multa,
         descontoAntecipado=payload.desconto_antecipado,
         diasProtestoAuto=payload.dias_protesto_auto,

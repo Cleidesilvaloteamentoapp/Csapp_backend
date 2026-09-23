@@ -6,22 +6,22 @@ from uuid import UUID
 
 from dateutil.relativedelta import relativedelta
 
+from app.services.sicredi.fees import DAYS_PER_MONTH
 from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-def _sicredi_or_none(value: str | None) -> str | None:
-    """Return None for 'ISENTO' so the field is excluded from the Sicredi payload.
+def _fee_type_or_none(value: str | None) -> str | None:
+    """Return None for 'ISENTO'/empty so the fee is treated as not applicable.
 
-    The Sicredi API accepts VALOR or PERCENTUAL for juros/multa/desconto but
-    rejects the string 'ISENTO' with HTTP 400. None → field omitted by
-    `CriarBoletoRequest.to_api_payload()` (exclude_none=True).
+    Only used to decide whether to render an instruction line — the outbound
+    payload is normalized by `CriarBoletoRequest` (app.services.sicredi.fees).
     """
-    if not value or value.upper() == "ISENTO":
+    if not value or value.strip().upper() == "ISENTO":
         return None
-    return value
+    return value.strip().upper()
 
 
 def _fmt_num(value) -> str:
@@ -44,7 +44,7 @@ def _format_fee_instructions(input_data: dict) -> list[str]:
     """
     lines: list[str] = []
 
-    tipo_multa = _sicredi_or_none(input_data.get("tipo_multa"))
+    tipo_multa = _fee_type_or_none(input_data.get("tipo_multa"))
     multa = input_data.get("multa")
     if tipo_multa and multa:
         if tipo_multa == "PERCENTUAL":
@@ -52,15 +52,19 @@ def _format_fee_instructions(input_data: dict) -> list[str]:
         elif tipo_multa == "VALOR":
             lines.append(f"Após o vencimento, multa de R$ {_fmt_num(multa)}.")
 
-    tipo_juros = _sicredi_or_none(input_data.get("tipo_juros"))
+    # The payer reads the contract's own wording: a contract states "0,33% ao
+    # dia" even though Sicredi registers the monthly equivalent (9,90% ao mês).
+    tipo_juros = _fee_type_or_none(input_data.get("tipo_juros"))
     juros = input_data.get("juros")
     if tipo_juros and juros:
-        if tipo_juros == "PERCENTUAL_MES":
+        if tipo_juros == "PERCENTUAL_DIA":
+            lines.append(f"Juros de mora de {_fmt_num(juros)}% ao dia.")
+        elif tipo_juros in ("PERCENTUAL_MES", "PERCENTUAL"):
             lines.append(f"Juros de mora de {_fmt_num(juros)}% ao mês.")
-        elif tipo_juros == "VALOR_DIA":
+        elif tipo_juros in ("VALOR_DIA", "VALOR"):
             lines.append(f"Juros de mora de R$ {_fmt_num(juros)} ao dia.")
 
-    tipo_desconto = _sicredi_or_none(input_data.get("tipo_desconto"))
+    tipo_desconto = _fee_type_or_none(input_data.get("tipo_desconto"))
     valor_desconto = input_data.get("valor_desconto_1")
     if tipo_desconto and valor_desconto:
         lines.append(
@@ -91,7 +95,7 @@ def _format_fee_lines_from_rates(penalty_rate, daily_interest_rate) -> list[str]
     if p > 0:
         lines.append(f"Após o vencimento, multa de {_fmt_num(p * 100)}%.")
     if d > 0:
-        lines.append(f"Juros de mora de {_fmt_num(d * 30 * 100)}% ao mês.")
+        lines.append(f"Juros de mora de {_fmt_num(d * float(DAYS_PER_MONTH) * 100)}% ao mês.")
     return lines
 
 
@@ -268,6 +272,7 @@ async def _process_batch_creation_async(
         informativos = ((input_data.get("informativos") or []) + fee_lines)[:5]
 
         results = []
+        aborted_detail: str | None = None
 
         for i in range(num_installments):
             due_date = first_due + relativedelta(months=interval * i)
@@ -284,16 +289,16 @@ async def _process_batch_creation_async(
                 valor=valor,
                 seuNumero=seu_numero,
                 beneficiarioFinal=beneficiario,
-                tipoDesconto=_sicredi_or_none(input_data.get("tipo_desconto")),
+                # Fee types are translated to Sicredi's VALOR/PERCENTUAL vocabulary
+                # by CriarBoletoRequest itself (app.services.sicredi.fees), which
+                # also drops an amount whose type turned out to be exempt.
+                tipoDesconto=input_data.get("tipo_desconto"),
                 valorDesconto1=input_data.get("valor_desconto_1"),
                 valorDesconto2=input_data.get("valor_desconto_2"),
                 valorDesconto3=input_data.get("valor_desconto_3"),
-                # Sicredi rejects "ISENTO" — only VALOR/PERCENTUAL are valid values.
-                # When the user picks "Isento", the frontend omits the field; however
-                # older batch records may have stored "ISENTO" in input_data. Filter it.
-                tipoJuros=_sicredi_or_none(input_data.get("tipo_juros")),
+                tipoJuros=input_data.get("tipo_juros"),
                 juros=input_data.get("juros"),
-                tipoMulta=_sicredi_or_none(input_data.get("tipo_multa")),
+                tipoMulta=input_data.get("tipo_multa"),
                 multa=input_data.get("multa"),
                 descontoAntecipado=input_data.get("desconto_antecipado"),
                 diasProtestoAuto=input_data.get("dias_protesto_auto"),
@@ -359,6 +364,21 @@ async def _process_batch_creation_async(
                     index=i,
                     error=exc.detail,
                 )
+                # A payload Sicredi refuses will be refused identically by every
+                # remaining installment — they share everything but the due date.
+                # Stop instead of burning N-1 calls (and N-1 rate-limit sleeps)
+                # on the same rejection, so the error stays legible.
+                if i == 0 and exc.status_code in (400, 422) and num_installments > 1:
+                    aborted_detail = exc.detail or str(exc)
+                    logger.warning(
+                        "batch_create_aborted_invalid_payload",
+                        batch_id=batch_id,
+                        remaining=num_installments - (i + 1),
+                        error=aborted_detail,
+                    )
+                    batch.results = results
+                    await db.commit()
+                    break
             except Exception as exc:
                 results.append({
                     "index": i,
@@ -385,7 +405,14 @@ async def _process_batch_creation_async(
                 await asyncio.sleep(0.5)
 
         # Final status
-        if batch.failed_items == batch.total_items:
+        if aborted_detail:
+            batch.status = "FAILED"
+            batch.error_summary = (
+                f"O Sicredi recusou a 1ª parcela e as {batch.total_items - 1} restantes "
+                f"não foram enviadas, pois usariam os mesmos dados. "
+                f"Nenhum boleto foi registrado. Erro: {aborted_detail}"
+            )
+        elif batch.failed_items == batch.total_items:
             batch.status = "FAILED"
             first_error = next(
                 (r.get("detail") for r in results if r.get("status") == "FAILED"),

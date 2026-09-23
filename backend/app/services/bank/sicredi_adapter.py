@@ -74,6 +74,8 @@ class SicrediAdapter(BankProvider):
             email=pagador.email or "",
         )
 
+        # Fee types are translated to Sicredi's VALOR/PERCENTUAL vocabulary by
+        # CriarBoletoRequest itself (app.services.sicredi.fees).
         req = CriarBoletoRequest(
             tipoCobranca=tipo_cobranca,
             especieDocumento=especie_documento,
@@ -81,6 +83,13 @@ class SicrediAdapter(BankProvider):
             dataVencimento=data_vencimento.strftime("%Y-%m-%d"),
             valor=float(valor),
             pagador=pag,
+            mensagens=mensagem or None,
+            tipoDesconto=(desconto or {}).get("tipo"),
+            valorDesconto1=(desconto or {}).get("valor"),
+            tipoJuros=(juros or {}).get("tipo"),
+            juros=(juros or {}).get("valor"),
+            tipoMulta=(multa or {}).get("tipo"),
+            multa=(multa or {}).get("valor"),
         )
 
         from app.services import sicredi_service

@@ -8,6 +8,11 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.sicredi import BeneficiarioFinalRequest, PagadorRequest
+from app.services.sicredi.fees import (
+    DESCONTO_PATTERN,
+    JUROS_PATTERN,
+    MULTA_PATTERN,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -36,13 +41,17 @@ class BatchCriarBoletosRequest(BaseModel):
     especie_documento: str = Field("DUPLICATA_MERCANTIL_INDICACAO")
 
     beneficiario_final: Optional[BeneficiarioFinalRequest] = None
-    tipo_desconto: Optional[str] = None
+    tipo_desconto: Optional[str] = Field(None, pattern=DESCONTO_PATTERN)
     valor_desconto_1: Optional[Decimal] = None
     valor_desconto_2: Optional[Decimal] = None
     valor_desconto_3: Optional[Decimal] = None
-    tipo_juros: Optional[str] = None
+    tipo_juros: Optional[str] = Field(
+        None,
+        pattern=JUROS_PATTERN,
+        description="ISENTO | VALOR_DIA (R$/dia) | PERCENTUAL_MES | PERCENTUAL_DIA (convertido para %/mês)",
+    )
     juros: Optional[Decimal] = None
-    tipo_multa: Optional[str] = None
+    tipo_multa: Optional[str] = Field(None, pattern=MULTA_PATTERN)
     multa: Optional[Decimal] = None
     desconto_antecipado: Optional[Decimal] = None
     dias_protesto_auto: Optional[int] = None

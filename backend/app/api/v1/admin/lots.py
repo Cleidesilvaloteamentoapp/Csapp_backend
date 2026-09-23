@@ -921,6 +921,24 @@ async def assign_lot(
     return ClientLotResponse.model_validate(cl)
 
 
+async def _resolve_effective_rates(
+    db: AsyncSession, client_lot: ClientLot
+) -> EffectiveRatesResponse:
+    """Resolve a contract's rates (per-lot → company → system default) as percentages.
+
+    Accepts a transient ClientLot too, so a not-yet-persisted assignment can be
+    previewed with the same fallback logic used at billing time.
+    """
+    rates = await get_all_effective_rates(db, client_lot)
+    return EffectiveRatesResponse(
+        penalty_rate=rate_to_percent(rates["penalty_rate"]),
+        daily_interest_rate=rate_to_percent(rates["daily_interest_rate"]),
+        adjustment_index=rates["adjustment_index"].value,
+        adjustment_frequency=rates["adjustment_frequency"].value,
+        adjustment_custom_rate=rate_to_percent(rates["adjustment_custom_rate"]),
+    )
+
+
 @router.post("/assign/preview", response_model=PaymentPlanPreviewResponse)
 async def preview_assign(
     data: PaymentPlanPreviewRequest,
@@ -952,15 +970,7 @@ async def preview_assign(
         adjustment_frequency=AdjustmentFrequency(data.adjustment_frequency) if data.adjustment_frequency else None,
         adjustment_custom_rate=data.adjustment_custom_rate,
     )
-    rates = await get_all_effective_rates(db, transient)
-
-    effective = EffectiveRatesResponse(
-        penalty_rate=rate_to_percent(rates["penalty_rate"]),
-        daily_interest_rate=rate_to_percent(rates["daily_interest_rate"]),
-        adjustment_index=rates["adjustment_index"].value,
-        adjustment_frequency=rates["adjustment_frequency"].value,
-        adjustment_custom_rate=rate_to_percent(rates["adjustment_custom_rate"]),
-    )
+    effective = await _resolve_effective_rates(db, transient)
 
     first_due = data.first_due
     if first_due is None and data.purchase_date is not None:
@@ -1049,7 +1059,12 @@ async def get_client_lot(
     cl = result.scalar_one_or_none()
     if not cl:
         raise HTTPException(status_code=404, detail="Client lot not found")
-    return ClientLotResponse.model_validate(cl)
+
+    response = ClientLotResponse.model_validate(cl)
+    # Resolve the late-payment rules actually in force so the carne form can
+    # prefill them instead of relying on the operator retyping the contract.
+    response.effective_rates = await _resolve_effective_rates(db, cl)
+    return response
 
 
 @router.patch("/client-lots/{client_lot_id}/financial-rules", response_model=ClientLotResponse)

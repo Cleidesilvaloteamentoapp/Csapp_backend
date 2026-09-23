@@ -80,7 +80,14 @@ class BankProvider(ABC):
         juros: Optional[dict] = None,
         multa: Optional[dict] = None,
     ) -> BoletoResult:
-        """Create a boleto in the bank system."""
+        """Create a boleto in the bank system.
+
+        ``desconto``, ``juros`` and ``multa`` take ``{"tipo": str, "valor": Decimal}``.
+        Accepted ``tipo`` values are the app's own vocabulary — for juros,
+        ``VALOR_DIA`` / ``PERCENTUAL_MES`` / ``PERCENTUAL_DIA`` / ``ISENTO``; for
+        multa and desconto, ``VALOR`` / ``PERCENTUAL`` / ``ISENTO``. Each provider
+        translates them to its bank's wire vocabulary.
+        """
         ...
 
     @abstractmethod
