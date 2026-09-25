@@ -43,6 +43,27 @@ class FinancialOverview(BaseModel):
     due_soon_amount: Decimal = Decimal("0")
     due_soon_count: int = 0
 
+    # --- Current month -------------------------------------------------------
+    # The totals above are lifetime figures, which say nothing about whether
+    # this month is on track. These break the month down so the admin can see
+    # the projection against what actually came in.
+
+    # Everything falling due this month, whatever its status: the month's target.
+    month_expected_amount: Decimal = Decimal("0")
+    month_expected_count: int = 0
+    # Cash actually settled this month, by paid_at -- includes payments of older
+    # overdue installments, so it is the real inflow, not the month's target met.
+    month_received_amount: Decimal = Decimal("0")
+    month_received_count: int = 0
+    # Due this month and still unpaid, split by whether the date has passed.
+    month_open_amount: Decimal = Decimal("0")
+    month_open_count: int = 0
+    month_overdue_amount: Decimal = Decimal("0")
+    month_overdue_count: int = 0
+    # What is already scheduled for next month.
+    next_month_expected_amount: Decimal = Decimal("0")
+    next_month_expected_count: int = 0
+
 
 class RevenueChartPoint(BaseModel):
     """Single data point for revenue chart."""

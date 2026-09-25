@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import get_client_user
 from app.models.boleto import Boleto
+from app.models.enums import BoletoStatus
 from app.models.client import Client
 from app.models.invoice import Invoice
 from app.models.client_lot import ClientLot
@@ -24,6 +25,7 @@ from app.schemas.sicredi import ConsultaBoletoAPIResponse
 from app.services import segunda_via_service, sicredi_service
 from app.services.sicredi.exceptions import SicrediError
 from app.utils.logging import get_logger
+from app.utils.enum_filters import parse_enum_filter
 
 logger = get_logger(__name__)
 
@@ -57,8 +59,9 @@ async def list_my_boletos(
         select(Boleto)
         .where(Boleto.client_id == client.id, Boleto.company_id == user.company_id)
     )
-    if status:
-        query = query.where(Boleto.status == status)
+    boleto_status = parse_enum_filter(BoletoStatus, status)
+    if boleto_status is not None:
+        query = query.where(Boleto.status == boleto_status)
 
     query = query.order_by(Boleto.data_vencimento.desc())
     rows = await db.execute(query)

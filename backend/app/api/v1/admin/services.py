@@ -17,6 +17,7 @@ from app.models.enums import ServiceOrderStatus
 from app.models.service import ServiceOrder, ServiceType
 from app.models.user import Profile
 from app.schemas.common import PaginatedResponse
+from app.utils.enum_filters import parse_enum_filter
 from app.schemas.service import (
     ServiceOrderFinancialUpdate,
     ServiceOrderResponse,
@@ -137,7 +138,7 @@ async def list_orders(
     base = select(ServiceOrder).where(ServiceOrder.company_id == admin.company_id)
     if status_filter:
         # Stored enum values are uppercase; accept lowercase filters from the UI.
-        base = base.where(ServiceOrder.status == status_filter.upper())
+        base = base.where(ServiceOrder.status == parse_enum_filter(ServiceOrderStatus, status_filter))
     if client_id:
         base = base.where(ServiceOrder.client_id == client_id)
 

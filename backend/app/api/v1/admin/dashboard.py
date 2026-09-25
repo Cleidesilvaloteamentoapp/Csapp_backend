@@ -3,6 +3,8 @@
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+
+from dateutil.relativedelta import relativedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -245,6 +247,56 @@ async def financial_overview(
     )
     due_soon = (await db.execute(due_soon_q)).one()
 
+    # --- Current month -------------------------------------------------------
+    # The lifetime totals above never answer "is this month on track?", so the
+    # month is broken out: what is due, what actually came in, what is still
+    # open, and what is already scheduled for next month.
+    month_start = today.replace(day=1)
+    next_month_start = (month_start + relativedelta(months=1))
+    following_month_start = (month_start + relativedelta(months=2))
+
+    async def _sum_count(*where) -> tuple[Decimal, int]:
+        r = (await db.execute(
+            select(
+                func.coalesce(func.sum(Invoice.amount), 0),
+                func.count(),
+            ).where(Invoice.company_id == cid, *where)
+        )).one()
+        return Decimal(str(r[0])), r[1]
+
+    not_cancelled = Invoice.status != InvoiceStatus.CANCELLED
+    due_this_month = (
+        Invoice.due_date >= month_start,
+        Invoice.due_date < next_month_start,
+    )
+
+    month_expected = await _sum_count(not_cancelled, *due_this_month)
+
+    # By paid_at, not due_date: this is cash that actually landed this month,
+    # including late payments of earlier installments.
+    month_received = await _sum_count(
+        Invoice.status == InvoiceStatus.PAID,
+        Invoice.paid_at.isnot(None),
+        Invoice.paid_at >= datetime.combine(month_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+        Invoice.paid_at < datetime.combine(next_month_start, datetime.min.time()).replace(tzinfo=timezone.utc),
+    )
+
+    month_open = await _sum_count(
+        Invoice.status == InvoiceStatus.PENDING,
+        Invoice.due_date >= today,
+        *due_this_month,
+    )
+    month_overdue = await _sum_count(
+        Invoice.status.in_([InvoiceStatus.PENDING, InvoiceStatus.OVERDUE]),
+        Invoice.due_date < today,
+        *due_this_month,
+    )
+    next_month_expected = await _sum_count(
+        not_cancelled,
+        Invoice.due_date >= next_month_start,
+        Invoice.due_date < following_month_start,
+    )
+
     return FinancialOverview(
         total_receivable=Decimal(str(total_receivable)),
         total_received=Decimal(str(total_received)),
@@ -252,6 +304,16 @@ async def financial_overview(
         overdue_count=row[1],
         due_soon_amount=Decimal(str(due_soon[0])),
         due_soon_count=due_soon[1],
+        month_expected_amount=month_expected[0],
+        month_expected_count=month_expected[1],
+        month_received_amount=month_received[0],
+        month_received_count=month_received[1],
+        month_open_amount=month_open[0],
+        month_open_count=month_open[1],
+        month_overdue_amount=month_overdue[0],
+        month_overdue_count=month_overdue[1],
+        next_month_expected_amount=next_month_expected[0],
+        next_month_expected_count=next_month_expected[1],
     )
 
 

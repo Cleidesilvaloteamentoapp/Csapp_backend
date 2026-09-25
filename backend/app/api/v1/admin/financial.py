@@ -22,6 +22,7 @@ from app.models.user import Profile
 from app.schemas.common import PaginatedResponse
 from app.schemas.dashboard import DefaulterInfo, FinancialOverview, RevenueByService
 from app.schemas.invoice import InvoiceResponse
+from app.utils.enum_filters import parse_enum_filter
 
 router = APIRouter(prefix="/financial", tags=["Admin Financial"])
 
@@ -72,8 +73,9 @@ async def receivables(
     """Paginated list of invoices (accounts receivable)."""
     cid = admin.company_id
     base = select(Invoice).where(Invoice.company_id == cid)
-    if status_filter:
-        base = base.where(Invoice.status == status_filter)
+    invoice_status = parse_enum_filter(InvoiceStatus, status_filter)
+    if invoice_status is not None:
+        base = base.where(Invoice.status == invoice_status)
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
     rows = await db.execute(

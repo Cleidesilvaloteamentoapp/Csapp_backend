@@ -33,6 +33,7 @@ from app.services.pricing_service import compute_plan
 from app.services.storage_service import delete_file, enrich_photos, upload_file
 from app.utils.exceptions import StorageError
 from app.utils.logging import get_logger
+from app.utils.enum_filters import parse_enum_filter
 from app.schemas.financial_settings import ClientLotFinancialUpdate, rate_to_percent
 from app.schemas.lot import (
     ClientLotResponse,
@@ -487,7 +488,7 @@ async def list_lots(
     if development_id:
         base = base.where(Lot.development_id == development_id)
     if status_filter:
-        base = base.where(Lot.status == status_filter)
+        base = base.where(Lot.status == parse_enum_filter(LotStatus, status_filter))
 
     total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
     rows = await db.execute(

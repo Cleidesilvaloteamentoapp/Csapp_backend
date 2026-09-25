@@ -130,3 +130,85 @@ async def test_dashboard_endpoints_are_company_scoped(
     assert resp.status_code == 200, resp.text
     cycles = next(i for i in resp.json()["items"] if i["key"] == "cycle_approvals")
     assert cycles["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_financial_overview_breaks_down_the_month(
+    client: AsyncClient, db_session: AsyncSession, test_company: Company, company_admin: Profile
+):
+    """The month panel: target, cash in, still open, overdue, and next month.
+
+    Lifetime totals never say whether the month is on track, which is what a
+    revenue projection actually needs.
+    """
+    from datetime import datetime, timezone
+    from dateutil.relativedelta import relativedelta
+
+    _, cl = await _make_contract(db_session, test_company, total_installments=24)
+    today = date.today()
+    month_start = today.replace(day=1)
+    next_month = month_start + relativedelta(months=1)
+
+    def inv(due, amount, status, number, paid_at=None):
+        return Invoice(
+            id=uuid.uuid4(), company_id=test_company.id, client_lot_id=cl.id,
+            due_date=due, amount=Decimal(amount), installment_number=number,
+            status=status, paid_at=paid_at,
+        )
+
+    # Vencida neste mês e paga neste mês -> conta no previsto E no recebido.
+    db_session.add(inv(month_start, "1000.00", InvoiceStatus.PAID, 1,
+                       datetime.now(timezone.utc)))
+    # Vencida neste mês, ainda em aberto e já passou -> atrasada do mês.
+    db_session.add(inv(month_start, "500.00", InvoiceStatus.OVERDUE, 2))
+    # Vence no fim deste mês, ainda a vencer -> aberta do mês.
+    db_session.add(inv(next_month - timedelta(days=1), "700.00", InvoiceStatus.PENDING, 3))
+    # Mês que vem -> só na projeção.
+    db_session.add(inv(next_month + timedelta(days=5), "900.00", InvoiceStatus.PENDING, 4))
+    await db_session.flush()
+
+    resp = await client.get(
+        "/api/v1/admin/dashboard/financial-overview", headers=auth_headers(company_admin)
+    )
+    assert resp.status_code == 200, resp.text
+    b = resp.json()
+
+    # Previsto do mês = tudo que vence no mês (1000 + 500 + 700)
+    assert Decimal(b["month_expected_amount"]) == Decimal("2200.00")
+    assert b["month_expected_count"] == 3
+    # Caixa que entrou no mês
+    assert Decimal(b["month_received_amount"]) == Decimal("1000.00")
+    # Ainda a vencer dentro do mês
+    assert Decimal(b["month_open_amount"]) == Decimal("700.00")
+    # Vencida e não paga dentro do mês
+    assert Decimal(b["month_overdue_amount"]) == Decimal("500.00")
+    # Projeção do mês seguinte
+    assert Decimal(b["next_month_expected_amount"]) == Decimal("900.00")
+    assert b["next_month_expected_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_receivables_status_filter_accepts_any_casing(
+    client: AsyncClient, db_session: AsyncSession, test_company: Company, company_admin: Profile
+):
+    """The Financeiro screen sends its filter lower-cased.
+
+    Comparing the enum column against the raw string made Postgres reject it
+    with `invalid input value for enum invoice_status: "pending"`, so every
+    filter on that screen except "Todas" returned a 500.
+    """
+    for value in ("pending", "PENDING", "Overdue", "all"):
+        resp = await client.get(
+            f"/api/v1/admin/financial/receivables?status={value}",
+            headers=auth_headers(company_admin),
+        )
+        assert resp.status_code == 200, f"{value} -> {resp.status_code}: {resp.text}"
+
+    # An unknown value is a client error, reported as one.
+    bad = await client.get(
+        "/api/v1/admin/financial/receivables?status=xpto",
+        headers=auth_headers(company_admin),
+    )
+    assert bad.status_code == 400, bad.text
+    assert "PENDING" in bad.json()["detail"]
+

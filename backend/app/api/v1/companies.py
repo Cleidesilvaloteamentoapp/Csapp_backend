@@ -25,6 +25,7 @@ from app.schemas.company import (
 from app.schemas.superadmin import SuperadminCreateRequest, SuperadminResponse
 from app.services import superadmin_service
 from app.utils.exceptions import AuthenticationError, ResourceNotFoundError
+from app.utils.enum_filters import parse_enum_filter
 
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
@@ -42,7 +43,7 @@ async def list_companies(
     base = select(Company)
 
     if status_filter:
-        base = base.where(Company.status == status_filter)
+        base = base.where(Company.status == parse_enum_filter(CompanyStatus, status_filter))
     if search:
         base = base.where(Company.name.ilike(f"%{search}%"))
 
