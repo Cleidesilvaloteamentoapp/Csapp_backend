@@ -10,6 +10,12 @@ Adds to ``cycle_approvals``: the settlement snapshot (``unpaid_count``,
 forced-renewal audit trail. Also adds the unique ``(client_lot_id,
 cycle_number)`` constraint the duplicate-guard was only enforcing in Python.
 
+NOTA DE DEPLOY: em produção o schema é aplicado à mão pelo SQL Editor do
+Supabase, não por `alembic upgrade` (não há create_all nem upgrade no boot --
+ver entrypoint.sh). O equivalente desta migração está em
+``sql/024_cycle_renewal_panel.sql`` e é ele que roda em produção. Mantenha os
+dois em sincronia.
+
 Revision ID: 019_cycle_renewal_panel
 Revises: 018_company_branding
 Create Date: 2026-09-25
