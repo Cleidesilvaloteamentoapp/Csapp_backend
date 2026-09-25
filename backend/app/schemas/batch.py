@@ -23,6 +23,14 @@ class BatchCriarBoletosRequest(BaseModel):
     """Request for creating multiple boletos at once with configurable frequency."""
 
     client_id: UUID = Field(..., description="Existing client UUID")
+    client_lot_id: Optional[UUID] = Field(
+        None,
+        description=(
+            "Contract this batch bills. When given, each boleto is bound to the "
+            "matching pending Invoice, which is what lets payment settle the "
+            "installment and release the next 12-installment cycle."
+        ),
+    )
     pagador: PagadorRequest
     valor: Decimal = Field(..., gt=0, description="Value per installment")
     frequency: str = Field(

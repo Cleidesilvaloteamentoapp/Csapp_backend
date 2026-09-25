@@ -23,15 +23,24 @@ logger = get_logger(__name__)
 
 
 async def _get_staff_in_company(
-    staff_id: uuid.UUID, company_id: uuid.UUID, db: AsyncSession
+    staff_id: uuid.UUID,
+    company_id: uuid.UUID,
+    db: AsyncSession,
+    roles: tuple[UserRole, ...] = (UserRole.STAFF,),
 ) -> Profile:
+    """Load a company member by id.
+
+    `roles` widens the lookup: the superadmin screen edits its own entries
+    through PATCH /admin/staff/{id}, which used to 404 every time because this
+    filter only ever matched STAFF.
+    """
     result = await db.execute(
         select(Profile)
         .options(selectinload(Profile.staff_permission))
         .where(
             Profile.id == staff_id,
             Profile.company_id == company_id,
-            Profile.role == UserRole.STAFF,
+            Profile.role.in_(roles),
         )
     )
     profile = result.scalar_one_or_none()
@@ -108,7 +117,10 @@ async def update_staff(
     company_id: uuid.UUID,
     db: AsyncSession,
 ) -> Profile:
-    profile = await _get_staff_in_company(staff_id, company_id, db)
+    # The superadmin section of the staff screen edits through this route too.
+    profile = await _get_staff_in_company(
+        staff_id, company_id, db, roles=(UserRole.STAFF, UserRole.SUPER_ADMIN)
+    )
 
     if data.full_name is not None:
         profile.full_name = data.full_name
@@ -152,7 +164,9 @@ async def update_staff(
 async def toggle_active(
     staff_id: uuid.UUID, company_id: uuid.UUID, db: AsyncSession
 ) -> Profile:
-    profile = await _get_staff_in_company(staff_id, company_id, db)
+    profile = await _get_staff_in_company(
+        staff_id, company_id, db, roles=(UserRole.STAFF, UserRole.SUPER_ADMIN)
+    )
     profile.is_active = not profile.is_active
     db.add(profile)
     await db.flush()

@@ -3,29 +3,52 @@
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, extract, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_company_admin, require_permission
+from app.core.deps import get_company_admin, require_permission, scoped_company
 from app.models.audit import AuditLog
+from app.models.batch_operation import BatchOperation
+from app.models.boleto import Boleto
 from app.models.client import Client
+from app.models.client_document import ClientDocument
 from app.models.client_lot import ClientLot
+from app.models.contract_transfer import ContractTransfer
+from app.models.cycle_approval import CycleApproval
+from app.models.early_payoff_request import EarlyPayoffRequest
 from app.models.enums import (
+    BoletoStatus,
     ClientLotStatus,
     ClientStatus,
+    CycleApprovalStatus,
+    DocumentStatus,
+    EarlyPayoffStatus,
     InvoiceStatus,
     LotStatus,
+    RenegotiationStatus,
+    RescissionStatus,
     ServiceOrderStatus,
+    ServiceRequestStatus,
+    TransferStatus,
 )
 from app.models.invoice import Invoice
 from app.models.lot import Lot
+from app.models.renegotiation import Renegotiation
+from app.models.rescission import Rescission
 from app.models.service import ServiceOrder, ServiceType
+from app.models.service_request import ServiceRequest
+from app.models.sicredi_event import SicrediEvent
 from app.models.user import Profile
 from app.schemas.dashboard import (
+    ActionQueue,
+    ActionQueueItem,
     AdminStats,
+    BillingPipeline,
+    BoletoStatusCount,
     DefaulterDetailResponse,
     FinancialOverview,
     RecentActivity,
@@ -85,9 +108,9 @@ router = APIRouter(prefix="/dashboard", tags=["Admin Dashboard"])
 async def get_stats(
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
 ):
     """General statistics for the admin dashboard."""
-    cid = admin.company_id
 
     total_clients = (await db.execute(
         select(func.count()).where(Client.company_id == cid)
@@ -182,9 +205,9 @@ async def get_stats(
 async def financial_overview(
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
 ):
     """Financial summary: receivable, received, overdue."""
-    cid = admin.company_id
 
     total_receivable = (await db.execute(
         select(func.coalesce(func.sum(Invoice.amount), 0)).where(
@@ -237,9 +260,9 @@ async def recent_activities(
     limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
 ):
     """Most recent operations for the company, sourced from the audit trail."""
-    cid = admin.company_id
 
     rows = (await db.execute(
         select(AuditLog)
@@ -264,9 +287,9 @@ async def revenue_chart(
     months: int = Query(6, ge=1, le=12),
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
 ):
     """Monthly revenue for the last N months (chronological, gaps filled with 0)."""
-    cid = admin.company_id
     now = datetime.now(timezone.utc)
 
     # First day of the month, (months - 1) months back — the window start.
@@ -308,9 +331,9 @@ async def revenue_chart(
 async def services_chart(
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
 ):
     """Most requested service types."""
-    cid = admin.company_id
     q = (
         select(ServiceType.name, func.count(ServiceOrder.id).label("cnt"))
         .join(ServiceOrder, ServiceOrder.service_type_id == ServiceType.id)
@@ -327,11 +350,11 @@ async def services_chart(
 async def list_defaulters(
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
     """List defaulter clients with overdue details (drill-down from dashboard card)."""
-    cid = admin.company_id
     today = datetime.now(timezone.utc).date()
 
     q = (
@@ -371,3 +394,231 @@ async def list_defaulters(
         )
         for r in rows
     ]
+
+
+@router.get("/action-queue", response_model=ActionQueue)
+async def action_queue(
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
+):
+    """Everything waiting on a human decision, in one round-trip.
+
+    The dashboard is the control panel, so each tile carries its own plain
+    instruction and a link to the screen already filtered to those rows --
+    counting is not the point, acting on the count is.
+    """
+
+    async def _count(model, *where) -> int:
+        return (await db.execute(
+            select(func.count()).select_from(model).where(model.company_id == cid, *where)
+        )).scalar() or 0
+
+    cycles_pending = await _count(
+        CycleApproval, CycleApproval.status == CycleApprovalStatus.PENDING
+    )
+    cycles_final = await _count(
+        CycleApproval,
+        CycleApproval.status == CycleApprovalStatus.PENDING,
+        CycleApproval.is_final_cycle.is_(True),
+    )
+    cycles_blocked = await _count(
+        CycleApproval,
+        CycleApproval.status == CycleApprovalStatus.PENDING,
+        CycleApproval.unpaid_count > 0,
+    )
+    transfers = await _count(
+        ContractTransfer, ContractTransfer.status == TransferStatus.PENDING
+    )
+    rescissions = await _count(
+        Rescission,
+        Rescission.status.in_([
+            RescissionStatus.REQUESTED, RescissionStatus.PENDING_APPROVAL
+        ]),
+    )
+    early_payoff = await _count(
+        EarlyPayoffRequest, EarlyPayoffRequest.status == EarlyPayoffStatus.PENDING
+    )
+    renegotiations = await _count(
+        Renegotiation, Renegotiation.status == RenegotiationStatus.PENDING_APPROVAL
+    )
+    documents = await _count(
+        ClientDocument, ClientDocument.status == DocumentStatus.PENDING_REVIEW
+    )
+    requests_open = await _count(
+        ServiceRequest,
+        ServiceRequest.status.in_([
+            ServiceRequestStatus.OPEN, ServiceRequestStatus.IN_PROGRESS
+        ]),
+    )
+
+    items = [
+        ActionQueueItem(
+            key="cycle_approvals",
+            label="Renovações de ciclo",
+            count=cycles_pending,
+            hint=(
+                "Contratos que chegaram ao fim das 12 parcelas. Aprove para gerar "
+                "o próximo carnê com o reajuste."
+                + (
+                    f" {cycles_blocked} com parcela em aberto — use 'Renovar agora'."
+                    if cycles_blocked
+                    else ""
+                )
+            ),
+            href="/admin/cycle-approvals?status=PENDING",
+            severity="critical" if cycles_pending else "info",
+        ),
+        ActionQueueItem(
+            key="final_cycles",
+            label="Último ciclo — escrituração",
+            count=cycles_final,
+            hint=(
+                "Contratos no último ciclo. Inicie a escrituração: o checklist de "
+                "documentos já está aberto."
+            ),
+            href="/admin/cycle-approvals?status=PENDING&final=1",
+            severity="warning" if cycles_final else "info",
+        ),
+        ActionQueueItem(
+            key="transfers",
+            label="Transferências de contrato",
+            count=transfers,
+            hint="Trocas de titularidade aguardando aprovação.",
+            href="/admin/transfers?status=PENDING",
+            severity="warning" if transfers else "info",
+        ),
+        ActionQueueItem(
+            key="rescissions",
+            label="Distratos",
+            count=rescissions,
+            hint="Pedidos de rescisão aguardando análise.",
+            href="/admin/rescissions?status=PENDING_APPROVAL",
+            severity="warning" if rescissions else "info",
+        ),
+        ActionQueueItem(
+            key="early_payoff",
+            label="Quitações antecipadas",
+            count=early_payoff,
+            hint="Clientes que pediram para quitar o saldo devedor.",
+            href="/admin/early-payoff-requests?status=PENDING",
+            severity="info",
+        ),
+        ActionQueueItem(
+            key="renegotiations",
+            label="Renegociações",
+            count=renegotiations,
+            hint="Acordos aguardando aprovação antes de virar boleto.",
+            href="/admin/financial?tab=renegotiations",
+            severity="warning" if renegotiations else "info",
+        ),
+        ActionQueueItem(
+            key="documents",
+            label="Documentos a revisar",
+            count=documents,
+            hint="Documentos enviados pelos clientes aguardando conferência.",
+            href="/admin/documents?status=PENDING_REVIEW",
+            severity="info",
+        ),
+        ActionQueueItem(
+            key="service_requests",
+            label="Solicitações abertas",
+            count=requests_open,
+            hint="Atendimentos em aberto no portal do cliente.",
+            href="/admin/service-requests?status=OPEN",
+            severity="info",
+        ),
+    ]
+
+    return ActionQueue(items=items, total=sum(i.count for i in items))
+
+
+@router.get("/billing-pipeline", response_model=BillingPipeline)
+async def billing_pipeline(
+    db: AsyncSession = Depends(get_db),
+    admin: Profile = Depends(require_permission("view_financial")),
+    cid: UUID = Depends(scoped_company),
+):
+    """Health of the billing chain, from invoice to registered boleto.
+
+    An installment with no boleto will never be paid, and an unpaid installment
+    holds its contract's whole cycle shut -- so this is the number that explains
+    why a renewal is stuck.
+    """
+    now = datetime.now(timezone.utc)
+
+    no_boleto = (await db.execute(
+        select(
+            func.count(Invoice.id),
+            func.coalesce(func.sum(Invoice.amount), 0),
+        ).where(
+            Invoice.company_id == cid,
+            Invoice.status.in_([InvoiceStatus.PENDING, InvoiceStatus.OVERDUE]),
+            ~Invoice.id.in_(
+                select(Boleto.invoice_id).where(
+                    Boleto.invoice_id.is_not(None),
+                    Boleto.status != BoletoStatus.CANCELADO,
+                )
+            ),
+        )
+    )).one()
+
+    status_rows = (await db.execute(
+        select(
+            Boleto.status,
+            func.count(Boleto.id),
+            func.coalesce(func.sum(Boleto.valor), 0),
+        )
+        .where(Boleto.company_id == cid)
+        .group_by(Boleto.status)
+    )).all()
+
+    in_progress = (await db.execute(
+        select(func.count()).select_from(BatchOperation).where(
+            BatchOperation.company_id == cid,
+            BatchOperation.status.in_(["PENDING", "PROCESSING"]),
+        )
+    )).scalar() or 0
+
+    week_ago = now - timedelta(days=7)
+    failed_recent = (await db.execute(
+        select(func.count()).select_from(BatchOperation).where(
+            BatchOperation.company_id == cid,
+            BatchOperation.status == "FAILED",
+            BatchOperation.created_at >= week_ago,
+        )
+    )).scalar() or 0
+
+    last_sync = (await db.execute(
+        select(func.max(SicrediEvent.created_at)).where(
+            SicrediEvent.company_id == cid,
+            SicrediEvent.success.is_(True),
+        )
+    )).scalar()
+
+    day_ago = now - timedelta(days=1)
+    errors_24h = (await db.execute(
+        select(func.count()).select_from(SicrediEvent).where(
+            SicrediEvent.company_id == cid,
+            SicrediEvent.success.is_(False),
+            SicrediEvent.created_at >= day_ago,
+        )
+    )).scalar() or 0
+
+    return BillingPipeline(
+        invoices_without_boleto=no_boleto[0] or 0,
+        invoices_without_boleto_amount=Decimal(str(no_boleto[1])),
+        boletos_by_status=[
+            BoletoStatusCount(
+                status=r[0].value if hasattr(r[0], "value") else str(r[0]),
+                count=r[1],
+                total_value=Decimal(str(r[2])),
+            )
+            for r in status_rows
+        ],
+        batches_in_progress=in_progress,
+        batches_failed_recently=failed_recent,
+        last_sicredi_sync=last_sync,
+        sicredi_errors_24h=errors_24h,
+    )
+

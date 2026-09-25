@@ -3,7 +3,7 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -173,3 +173,43 @@ def require_permission(permission: str):
         return current_user
 
     return _check
+
+
+def scoped_company(
+    company_id: Optional[UUID] = Query(
+        None,
+        description="SUPER_ADMIN only: operate on another company",
+    ),
+    current_user: Profile = Depends(get_current_user),
+) -> UUID:
+    """The company a request operates on, honouring a super admin's override.
+
+    Every tenant-scoped query filters on the caller's own `company_id`, which
+    leaves SUPER_ADMIN locked to a single company like everyone else. Rather
+    than reviving the ContextVar bypass -- `TenantMiddleware` reads
+    `request.state` *before* the auth dependency fills it in, so the value is
+    always None there -- the override is an explicit `?company_id=` that only
+    SUPER_ADMIN may pass. It is visible in the URL, in the logs and in the audit
+    trail, which is what cross-tenant access should be.
+    """
+    if company_id is None:
+        return current_user.company_id
+
+    user_role = (
+        current_user.role.value
+        if hasattr(current_user.role, "value")
+        else current_user.role
+    )
+    if user_role != UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Somente super admin pode acessar outra empresa",
+        )
+    logger.info(
+        "cross_company_access",
+        user_id=str(current_user.id),
+        from_company=str(current_user.company_id),
+        to_company=str(company_id),
+    )
+    return company_id
+

@@ -141,9 +141,14 @@ async def send_admin_alert(
 
     async def _lookup(session) -> list[str]:
         rows = await session.execute(
+            # Both admin roles must receive company alerts. Filtering on
+            # COMPANY_ADMIN alone silently reached nobody, because signup and
+            # /admin/superadmins both mint SUPER_ADMIN -- nothing creates a
+            # COMPANY_ADMIN, so every admin alert was sent to an empty list.
             select(Profile.email).where(
                 Profile.company_id == company_id,
-                Profile.role == UserRole.COMPANY_ADMIN,
+                Profile.role.in_([UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN]),
+                Profile.is_active.is_(True),
             )
         )
         return [r[0] for r in rows.all() if r[0]]

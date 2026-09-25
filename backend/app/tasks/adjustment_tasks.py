@@ -55,6 +55,7 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
         contracts = rows.scalars().all()
         adjusted_count = 0
         skipped_no_index = 0
+        skipped_awaiting_approval = 0
 
         # Cache index values per (index_type, company_id) to avoid repeated API calls
         index_cache: dict[tuple, Decimal] = {}
@@ -69,6 +70,14 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
             frequency = await get_effective_adjustment_frequency(db, cl)
             cycle_size = _CYCLE_SIZE.get(frequency.value, 12)
             min_months = _MIN_MONTHS.get(frequency.value, 12)
+
+            # Annual contracts are repriced by the cycle-approval flow, which is
+            # where an admin reviews the index and releases the next 12 boletos.
+            # Repricing them here too was a second, silent path that moved the
+            # installment value without any approval record behind it.
+            if cycle_size == 12:
+                skipped_awaiting_approval += 1
+                continue
 
             # Enforce the minimum interval for this specific frequency.
             if cl.last_adjustment_date and cl.last_adjustment_date > today - relativedelta(months=min_months):
@@ -124,7 +133,6 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
             # Update contract
             cl.current_installment_value = adj["new_value"]
             cl.last_adjustment_date = today
-            cl.current_cycle += 1
             cl.last_cycle_paid_at = today
 
             await record_event(
@@ -170,6 +178,7 @@ async def _apply_annual_adjustments_async(session_factory: TaskSessionFactory):
             "annual_adjustments_completed",
             count=adjusted_count,
             skipped_no_index=skipped_no_index,
+            skipped_awaiting_approval=skipped_awaiting_approval,
         )
 
 
@@ -188,7 +197,7 @@ async def _send_admin_alerts_async(session_factory: TaskSessionFactory):
     from sqlalchemy import select, func
     from app.models.client import Client
     from app.models.client_lot import ClientLot
-    from app.models.enums import ClientLotStatus, ClientStatus, InvoiceStatus
+    from app.models.enums import ClientStatus, InvoiceStatus
     from app.models.invoice import Invoice
     from app.services.email_service import send_admin_alert
 
@@ -224,43 +233,6 @@ async def _send_admin_alerts_async(session_factory: TaskSessionFactory):
                 )
             except Exception as exc:
                 logger.warning("admin_alert_failed", client_id=str(row.id), error=str(exc))
-
-        # Alert 2: Clients who completed a 12-invoice cycle
-        cycle_complete_rows = await db.execute(
-            select(
-                ClientLot.id.label("cl_id"),
-                ClientLot.company_id,
-                ClientLot.current_cycle,
-                Client.full_name,
-            )
-            .join(Client, Client.id == ClientLot.client_id)
-            .where(ClientLot.status == ClientLotStatus.ACTIVE)
-        )
-        for row in cycle_complete_rows.all():
-            # Check if last 12 invoices all paid
-            inv_rows = await db.execute(
-                select(Invoice)
-                .where(Invoice.client_lot_id == row.cl_id)
-                .order_by(Invoice.installment_number.desc())
-                .limit(12)
-            )
-            recent = list(inv_rows.scalars().all())
-            if len(recent) == 12 and all(inv.status == InvoiceStatus.PAID for inv in recent):
-                # Check if the most recent was paid in the last 7 days (avoid repeat alerts)
-                last_paid = max((inv.paid_at for inv in recent if inv.paid_at), default=None)
-                if last_paid and (today - last_paid.date()).days <= 7:
-                    try:
-                        await send_admin_alert(
-                            company_id=str(row.company_id),
-                            subject=f"Ciclo {row.current_cycle} concluído: {row.full_name}",
-                            message=(
-                                f"O cliente {row.full_name} completou o ciclo {row.current_cycle} "
-                                f"de 12 parcelas. Reajuste anual deve ser aplicado."
-                            ),
-                            db=db,
-                        )
-                    except Exception as exc:
-                        logger.warning("cycle_alert_failed", cl_id=str(row.cl_id), error=str(exc))
 
         logger.info("admin_alerts_completed", date=today.isoformat())
 

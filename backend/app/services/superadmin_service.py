@@ -19,8 +19,14 @@ async def create_superadmin(
     data: SuperadminCreateRequest,
     company_id: uuid.UUID,
     db: AsyncSession,
+    role: UserRole = UserRole.SUPER_ADMIN,
 ) -> Profile:
-    """Create a new superadmin user linked to the same company."""
+    """Create an administrator for *company_id*.
+
+    `role` distinguishes the two: SUPER_ADMIN is the platform role, while
+    COMPANY_ADMIN runs a single company. Creating a company used to leave an
+    orphan shell because nothing could make the latter.
+    """
 
     # Check email uniqueness
     existing_email = await db.execute(select(Profile).where(Profile.email == data.email))
@@ -37,7 +43,7 @@ async def create_superadmin(
     # Create profile
     profile = Profile(
         company_id=company_id,
-        role=UserRole.SUPER_ADMIN,
+        role=role,
         full_name=data.full_name,
         email=data.email,
         cpf_cnpj=data.cpf_cnpj,
@@ -48,9 +54,10 @@ async def create_superadmin(
     await db.flush()
 
     logger.info(
-        "superadmin_created",
+        "admin_created",
         user_id=str(profile.id),
         company_id=str(company_id),
+        role=role.value,
         email=data.email,
     )
 

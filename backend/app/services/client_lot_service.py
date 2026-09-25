@@ -132,58 +132,6 @@ async def get_boleto_liquidated_invoice_ids(
     return {r[0] for r in rows.all() if r[0] is not None}
 
 
-async def should_generate_next_batch(
-    db: AsyncSession, client_lot_id: UUID, days_threshold: int = 30
-) -> tuple[bool, Optional[str]]:
-    """Check if it's time to generate the next batch of 12 installments.
-
-    Args:
-        db: Database session
-        client_lot_id: Client lot UUID
-        days_threshold: Days before next due date to trigger alert
-
-    Returns:
-        Tuple of (should_generate, reason)
-    """
-    info = await get_remaining_installments(db, client_lot_id)
-    if not info:
-        return False, "Client lot not found"
-
-    # Check if current cycle is complete (12 paid)
-    if info.installments_in_current_cycle < 12:
-        return False, f"Current cycle not complete ({info.installments_in_current_cycle}/12 paid)"
-
-    # Check if there are remaining installments
-    if info.remaining_installments <= 0:
-        return False, "All installments already paid"
-
-    # Check if next batch would exceed total
-    if info.remaining_installments < 12:
-        return False, f"Only {info.remaining_installments} installments remaining"
-
-    # Check if there's a recent invoice due date to compare against
-    next_due_stmt = (
-        select(Invoice)
-        .where(
-            Invoice.client_lot_id == client_lot_id,
-            Invoice.status == InvoiceStatus.PENDING,
-        )
-        .order_by(Invoice.due_date.asc())
-        .limit(1)
-    )
-    next_result = await db.execute(next_due_stmt)
-    next_invoice = next_result.scalar_one_or_none()
-
-    if next_invoice:
-        from datetime import date, timedelta
-
-        days_until_due = (next_invoice.due_date - date.today()).days
-        if days_until_due > days_threshold:
-            return False, f"Next due date is {days_until_due} days away (threshold: {days_threshold})"
-
-    return True, f"Cycle {info.current_cycle} complete - ready for cycle {info.next_cycle_number}"
-
-
 async def calculate_next_installment_value(
     db: AsyncSession, client_lot_id: UUID, adjustment_rate: Decimal
 ) -> Optional[Decimal]:

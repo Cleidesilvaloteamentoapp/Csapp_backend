@@ -139,6 +139,88 @@ STATUS_UPDATE_MAP = {
 # Batch Creation
 # ---------------------------------------------------------------------------
 
+async def _resolve_invoice_ids(
+    db,
+    company_id: UUID,
+    client_id: UUID,
+    client_lot_id: UUID | None,
+    due_dates: list[date],
+) -> list[UUID | None]:
+    """Map each installment of a batch to the Invoice it bills, by position.
+
+    Binding the boleto to its invoice is what makes the whole renewal chain work:
+    settlement flips the Invoice to PAID, and the cycle-completion job counts
+    those PAID invoices to decide when to raise a CycleApproval. A batch that
+    leaves `invoice_id` NULL produces boletos that can never release a cycle.
+
+    Returns a list aligned with *due_dates*; an entry is None when no unbilled
+    invoice matches, so the boleto is still issued rather than silently dropped.
+    """
+    from sqlalchemy import select
+    from app.models.boleto import Boleto
+    from app.models.client_lot import ClientLot
+    from app.models.enums import InvoiceStatus
+    from app.models.invoice import Invoice
+
+    stmt = (
+        select(Invoice)
+        .where(
+            Invoice.company_id == company_id,
+            Invoice.status.in_([InvoiceStatus.PENDING, InvoiceStatus.OVERDUE]),
+        )
+        .order_by(Invoice.due_date.asc(), Invoice.installment_number.asc())
+    )
+    if client_lot_id is not None:
+        stmt = stmt.where(Invoice.client_lot_id == client_lot_id)
+    else:
+        # Legacy batches carry only a client: consider every contract they hold.
+        stmt = stmt.where(
+            Invoice.client_lot_id.in_(
+                select(ClientLot.id).where(ClientLot.client_id == client_id)
+            )
+        )
+
+    candidates = list((await db.execute(stmt)).scalars().all())
+    if not candidates:
+        return [None] * len(due_dates)
+
+    # Never bind an invoice that already carries a live boleto, or the same
+    # installment would be charged twice.
+    taken = {
+        row[0]
+        for row in (
+            await db.execute(
+                select(Boleto.invoice_id).where(
+                    Boleto.invoice_id.in_([inv.id for inv in candidates])
+                )
+            )
+        ).all()
+        if row[0] is not None
+    }
+    available = [inv for inv in candidates if inv.id not in taken]
+
+    by_due: dict[date, list] = {}
+    for inv in available:
+        by_due.setdefault(inv.due_date, []).append(inv)
+
+    resolved: list[UUID | None] = []
+    used: set[UUID] = set()
+    for due in due_dates:
+        exact = next((i for i in by_due.get(due, []) if i.id not in used), None)
+        if exact is None:
+            # Fall back to the earliest still-unused invoice: the batch due dates
+            # are derived from a frequency, so they drift from the contract's own
+            # schedule, but the order of installments is the same.
+            exact = next((i for i in available if i.id not in used), None)
+        if exact is None:
+            resolved.append(None)
+            continue
+        used.add(exact.id)
+        resolved.append(exact.id)
+
+    return resolved
+
+
 async def _process_batch_creation_async(
     session_factory: TaskSessionFactory, batch_id: str, company_id: str
 ):
@@ -147,7 +229,7 @@ async def _process_batch_creation_async(
     from app.models.batch_operation import BatchOperation
     from app.models.boleto import Boleto
     from app.models.client import Client
-    from app.models.enums import BoletoStatus
+    from app.models.enums import BoletoStatus, BoletoTag
     from app.services import sicredi_service
     from app.services.sicredi.audit_recorder import (
         persist_recorded_calls,
@@ -271,11 +353,32 @@ async def _process_batch_creation_async(
         mensagens = ((input_data.get("mensagens") or []) + fee_lines)[:4]
         informativos = ((input_data.get("informativos") or []) + fee_lines)[:5]
 
+        # Bind each installment to the Invoice it bills before issuing anything:
+        # a boleto with a NULL invoice_id can never settle its installment, and
+        # the cycle-renewal chain is driven entirely off settled invoices.
+        due_dates = [
+            first_due + relativedelta(months=interval * i) for i in range(num_installments)
+        ]
+        raw_lot_id = input_data.get("client_lot_id")
+        client_lot_id = UUID(raw_lot_id) if raw_lot_id else None
+        invoice_ids = await _resolve_invoice_ids(
+            db, cid, client_id, client_lot_id, due_dates
+        )
+        unbound = sum(1 for inv_id in invoice_ids if inv_id is None)
+        if unbound:
+            logger.warning(
+                "batch_create_unbound_installments",
+                batch_id=batch_id,
+                unbound=unbound,
+                total=num_installments,
+                client_lot_id=str(client_lot_id) if client_lot_id else None,
+            )
+
         results = []
         aborted_detail: str | None = None
 
         for i in range(num_installments):
-            due_date = first_due + relativedelta(months=interval * i)
+            due_date = due_dates[i]
             seu_numero = f"BAT{batch_id[-4:]}{i + 1:03d}"
 
             boleto_req = CriarBoletoRequest(
@@ -331,6 +434,8 @@ async def _process_batch_creation_async(
                     status=BoletoStatus.NORMAL,
                     txid=api_result.txid,
                     qr_code=api_result.qrCode,
+                    invoice_id=invoice_ids[i],
+                    tag=BoletoTag.PARCELA_CONTRATO,
                     pagador_data=pagador_data,
                     raw_response=api_result.model_dump(mode="json"),
                     created_by=UUID(input_data["created_by"]) if input_data.get("created_by") else None,

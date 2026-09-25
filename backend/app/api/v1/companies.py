@@ -15,13 +15,16 @@ from app.models.company import Company
 from app.models.enums import CompanyStatus
 from app.models.user import Profile
 from app.schemas.common import PaginatedResponse
+from app.models.enums import UserRole
 from app.schemas.company import (
     CompanyCreate,
     CompanyResponse,
     CompanyStatusUpdate,
     CompanyUpdate,
 )
-from app.utils.exceptions import ResourceNotFoundError
+from app.schemas.superadmin import SuperadminCreateRequest, SuperadminResponse
+from app.services import superadmin_service
+from app.utils.exceptions import AuthenticationError, ResourceNotFoundError
 
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
@@ -125,3 +128,60 @@ async def update_company_status(
     company.status = CompanyStatus(data.status)
     await db.flush()
     return CompanyResponse.model_validate(company)
+
+
+@router.get("/{company_id}/admins", response_model=list[SuperadminResponse])
+async def list_company_admins(
+    company_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    _admin: Profile = Depends(get_super_admin),
+):
+    """Administrators of a company, so a platform admin can see who runs it."""
+    rows = await db.execute(
+        select(Profile)
+        .where(
+            Profile.company_id == company_id,
+            Profile.role.in_([UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN]),
+        )
+        .order_by(Profile.created_at.asc())
+    )
+    return [SuperadminResponse.model_validate(p) for p in rows.scalars().all()]
+
+
+@router.post(
+    "/{company_id}/admins",
+    response_model=SuperadminResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_company_admin(
+    company_id: UUID,
+    data: SuperadminCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _admin: Profile = Depends(get_super_admin),
+):
+    """Create the administrator of a company.
+
+    Creating a company used to produce a shell nobody could log into: no
+    endpoint could make a COMPANY_ADMIN, and /admin/superadmins hard-coded the
+    caller's own company. This is what makes the reseller flow actually work.
+    """
+    company = (await db.execute(
+        select(Company).where(Company.id == company_id)
+    )).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+
+    try:
+        profile = await superadmin_service.create_superadmin(
+            data=data,
+            company_id=company_id,
+            db=db,
+            role=UserRole.COMPANY_ADMIN,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.detail) from exc
+
+    await db.commit()
+    await db.refresh(profile)
+    return SuperadminResponse.model_validate(profile)
+

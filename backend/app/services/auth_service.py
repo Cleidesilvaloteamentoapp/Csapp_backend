@@ -25,7 +25,12 @@ logger = get_logger(__name__)
 
 
 async def signup(data: SignupRequest, db: AsyncSession) -> TokenResponse:
-    """Register a new company with its first super_admin user."""
+    """Register a new company with its first administrator.
+
+    The administrator is a COMPANY_ADMIN, not a SUPER_ADMIN: SUPER_ADMIN is the
+    platform role and reaches across companies, so signing up must not hand it
+    out. Platform accounts are created deliberately, via /admin/superadmins.
+    """
 
     # Check slug uniqueness
     existing = await db.execute(select(Company).where(Company.slug == data.company_slug))
@@ -57,7 +62,7 @@ async def signup(data: SignupRequest, db: AsyncSession) -> TokenResponse:
     # Create profile
     profile = Profile(
         company_id=company.id,
-        role=UserRole.SUPER_ADMIN,
+        role=UserRole.COMPANY_ADMIN,
         full_name=data.full_name,
         email=data.email,
         cpf_cnpj=data.cpf_cnpj,
@@ -73,12 +78,12 @@ async def signup(data: SignupRequest, db: AsyncSession) -> TokenResponse:
         access_token=create_access_token(
             user_id=str(profile.id),
             company_id=str(company.id),
-            role=UserRole.SUPER_ADMIN.value,
+            role=UserRole.COMPANY_ADMIN.value,
         ),
         refresh_token=create_refresh_token(
             user_id=str(profile.id),
             company_id=str(company.id),
-            role=UserRole.SUPER_ADMIN.value,
+            role=UserRole.COMPANY_ADMIN.value,
         ),
     )
 
@@ -103,6 +108,22 @@ async def login(data: LoginRequest, db: AsyncSession) -> TokenResponse:
     if profile is None:
         logger.warning("login_failed", email=data.email, reason="bad_password")
         raise AuthenticationError("Invalid email or password")
+
+    # Suspending a company was settable but never enforced, so its users kept
+    # working as if nothing had happened.
+    company = (await db.execute(
+        select(Company).where(Company.id == profile.company_id)
+    )).scalar_one_or_none()
+    if company and company.status != CompanyStatus.ACTIVE:
+        logger.warning(
+            "login_blocked",
+            email=data.email,
+            company_id=str(profile.company_id),
+            company_status=company.status.value,
+        )
+        raise AuthenticationError(
+            "Esta empresa está suspensa. Entre em contato com o suporte."
+        )
 
     logger.info("login_success", user_id=str(profile.id))
 

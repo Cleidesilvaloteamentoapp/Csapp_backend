@@ -115,3 +115,47 @@ class RevenueByService(BaseModel):
     total_revenue: Decimal
     total_cost: Decimal
     order_count: int
+
+
+class ActionQueueItem(BaseModel):
+    """One thing waiting on a human decision, with where to go and act on it."""
+
+    key: str
+    label: str
+    count: int = 0
+    # Plain-language instruction: the dashboard is the control panel, so each
+    # tile says what the number means and what to do about it.
+    hint: str = ""
+    href: str
+    severity: str = "info"  # info | warning | critical
+
+
+class ActionQueue(BaseModel):
+    """Everything awaiting a decision, in one round-trip."""
+
+    items: list[ActionQueueItem] = []
+    total: int = 0
+
+
+class BoletoStatusCount(BaseModel):
+    status: str
+    count: int = 0
+    total_value: Decimal = Decimal("0")
+
+
+class BillingPipeline(BaseModel):
+    """Health of the billing chain, from invoice to registered boleto.
+
+    `invoices_without_boleto` is the one that matters most: an installment with
+    no boleto is never going to be paid, and it silently blocks the contract's
+    cycle from ever being released.
+    """
+
+    invoices_without_boleto: int = 0
+    invoices_without_boleto_amount: Decimal = Decimal("0")
+    boletos_by_status: list[BoletoStatusCount] = []
+    batches_in_progress: int = 0
+    batches_failed_recently: int = 0
+    last_sicredi_sync: Optional[datetime] = None
+    sicredi_errors_24h: int = 0
+

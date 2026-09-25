@@ -401,6 +401,24 @@ async def batch_criar_boletos(
     if not result_db.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Client not found")
 
+    # A contract from another client (or another company) would bind the boletos
+    # to the wrong invoices, so reject it here rather than in the worker.
+    if payload.client_lot_id:
+        from app.models.client_lot import ClientLot
+
+        owns = await db.execute(
+            select(ClientLot).where(
+                ClientLot.id == payload.client_lot_id,
+                ClientLot.client_id == payload.client_id,
+                ClientLot.company_id == admin.company_id,
+            )
+        )
+        if not owns.scalar_one_or_none():
+            raise HTTPException(
+                status_code=404,
+                detail="Contrato não encontrado para este cliente",
+            )
+
     # Verify Sicredi credentials are configured for this company.
     # Without this, the batch would be enqueued, fail silently in the worker,
     # and leave the user thinking boletos are "stuck saving to DB only".
@@ -425,6 +443,10 @@ async def batch_criar_boletos(
     input_data["client_id"] = str(payload.client_id)
     input_data["created_by"] = str(admin.id)
     input_data["data_primeiro_vencimento"] = payload.data_primeiro_vencimento.isoformat()
+    # The worker binds each boleto to the contract's pending invoice; without the
+    # contract it can only guess by due date across all of the client's contracts.
+    if payload.client_lot_id:
+        input_data["client_lot_id"] = str(payload.client_lot_id)
 
     batch = BatchOperation(
         company_id=admin.company_id,

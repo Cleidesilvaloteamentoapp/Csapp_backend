@@ -3,6 +3,8 @@
 
 from datetime import date, timedelta
 
+from dateutil.relativedelta import relativedelta
+
 from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
 from app.utils.logging import get_logger
@@ -68,16 +70,16 @@ def check_overdue_invoices(self):
 
 
 async def _generate_monthly_invoices_async(session_factory: TaskSessionFactory):
-    """Generate next month's invoices for active client_lots.
+    """Top up invoices for active client_lots within their current cycle.
 
-    CYCLE LOCK RULE: New invoices for a new 12-month cycle are only
-    generated after the previous cycle is fully paid.
+    CYCLE BOUNDARY RULE: this task never starts a new 12-installment cycle.
+    Crossing that boundary reprices the installment and is released by an admin
+    on /admin/cycle-approvals, which generates the next batch itself.
     """
     from sqlalchemy import select
     from app.models.client_lot import ClientLot
     from app.models.enums import ClientLotStatus, InvoiceStatus
     from app.models.invoice import Invoice
-    from app.services.client_lot_service import get_boleto_liquidated_invoice_ids
 
     async with session_factory() as db:
         rows = await db.execute(
@@ -103,26 +105,18 @@ async def _generate_monthly_invoices_async(session_factory: TaskSessionFactory):
             if existing >= total_installments:
                 continue  # All installments already generated
 
-            # CYCLE LOCK: check if current cycle's invoices are all paid
+            # Cycle boundary: everything past it belongs to the approval flow.
             cycle_size = 12
-            current_cycle_start = (cl.current_cycle - 1) * cycle_size
             current_cycle_end = cl.current_cycle * cycle_size
 
             if existing >= current_cycle_end:
-                # Need to start a new cycle — check if current cycle is fully paid.
-                # Renewal only recognizes installments settled via a LIQUIDADO boleto.
-                liquidated_ids = await get_boleto_liquidated_invoice_ids(db, cl.id)
-                cycle_invoices = [
-                    inv for inv in all_invoices
-                    if current_cycle_start < inv.installment_number <= current_cycle_end
-                ]
-                unpaid = [
-                    inv for inv in cycle_invoices
-                    if inv.status != InvoiceStatus.PAID or inv.id not in liquidated_ids
-                ]
-                if unpaid:
-                    skipped_cycle_lock += 1
-                    continue  # BLOCKED: previous cycle not fully paid via boleto
+                # Crossing into the next cycle is the admin's decision, not this
+                # task's: the next 12 installments carry a repriced value that an
+                # admin approves on /admin/cycle-approvals, and approve_cycle
+                # generates them itself. Emitting one here would bill the client
+                # at the stale value and bypass the approval entirely.
+                skipped_cycle_lock += 1
+                continue
 
             # Find last invoice due date
             last_inv = await db.execute(
@@ -135,7 +129,12 @@ async def _generate_monthly_invoices_async(session_factory: TaskSessionFactory):
                 .limit(1)
             )
             last = last_inv.scalar_one_or_none()
-            next_due = (last.due_date + timedelta(days=30)) if last else date.today() + timedelta(days=30)
+            # relativedelta preserves the day-of-month across months; timedelta(30) drifts.
+            next_due = (
+                (last.due_date + relativedelta(months=1))
+                if last
+                else date.today() + relativedelta(months=1)
+            )
 
             # Use current_installment_value if set (after adjustment), else calculate
             installment_value = cl.current_installment_value or (cl.total_value / total_installments)

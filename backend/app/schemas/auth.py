@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class SignupRequest(BaseModel):
-    """Register a new company with an initial super_admin user."""
+    """Register a new company with its first COMPANY_ADMIN user."""
 
     company_name: str = Field(..., min_length=2, max_length=255)
     company_slug: str = Field(..., min_length=2, max_length=255, pattern=r"^[a-z0-9-]+$")

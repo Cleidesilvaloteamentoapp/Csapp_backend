@@ -29,29 +29,56 @@ async def notify_admins(
     message: str,
     n_type: NotificationType,
     data: Optional[dict] = None,
+    staff_permission: Optional[str] = None,
 ) -> None:
     """Create in-app notifications for all company admins and send WhatsApp to configured numbers.
 
     Args:
         settings_key: field name in CompanyNotificationSettings to gate the send.
         title/message/n_type/data: notification content.
+        staff_permission: when set, STAFF holding this flag are notified too.
+            Staff who can act on something should hear about it -- a cycle
+            approval is actionable by anyone with `manage_financial`.
     """
     try:
         settings = await get_or_create(db, company_id)
         if not is_enabled(settings, settings_key):
             return
 
-        # In-app notifications for all COMPANY_ADMIN profiles
+        # In-app notifications for every admin of the company. Filtering on
+        # COMPANY_ADMIN alone reached nobody: nothing in the system creates that
+        # role -- signup and /admin/superadmins both create SUPER_ADMIN -- so the
+        # cycle-renewal alert never had a recipient.
         admin_profiles = (
             await db.execute(
                 select(Profile).where(
                     Profile.company_id == company_id,
-                    Profile.role == UserRole.COMPANY_ADMIN,
+                    Profile.role.in_([UserRole.SUPER_ADMIN, UserRole.COMPANY_ADMIN]),
+                    Profile.is_active.is_(True),
                 )
             )
         ).scalars().all()
 
-        for profile in admin_profiles:
+        recipients = list(admin_profiles)
+
+        if staff_permission:
+            from app.models.staff_permission import StaffPermission
+
+            staff_rows = (
+                await db.execute(
+                    select(Profile)
+                    .join(StaffPermission, StaffPermission.profile_id == Profile.id)
+                    .where(
+                        Profile.company_id == company_id,
+                        Profile.role == UserRole.STAFF,
+                        Profile.is_active.is_(True),
+                        getattr(StaffPermission, staff_permission).is_(True),
+                    )
+                )
+            ).scalars().all()
+            recipients.extend(staff_rows)
+
+        for profile in recipients:
             try:
                 await create_notification(
                     db,

@@ -15,6 +15,31 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/superadmins", tags=["Admin – Superadmins"])
 
 
+@router.get("", response_model=list[SuperadminResponse])
+async def list_superadmins(
+    current_user: Profile = Depends(get_super_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Other platform admins in this company.
+
+    The staff screen has always called this; it did not exist, and the frontend
+    swallowed the 404, so the list silently rendered empty.
+    """
+    from sqlalchemy import select
+
+    from app.models.enums import UserRole
+
+    rows = await db.execute(
+        select(Profile)
+        .where(
+            Profile.company_id == current_user.company_id,
+            Profile.role == UserRole.SUPER_ADMIN,
+        )
+        .order_by(Profile.created_at.asc())
+    )
+    return [SuperadminResponse.model_validate(p) for p in rows.scalars().all()]
+
+
 @router.post("", response_model=SuperadminResponse, status_code=status.HTTP_201_CREATED)
 async def create_superadmin(
     data: SuperadminCreateRequest,

@@ -70,7 +70,7 @@ async def list_transfers(
         if t.to_client:
             to_name = t.to_client.full_name
         if t.client_lot:
-            lot_row = await db.execute(select(Lot.block, Lot.number).where(Lot.id == t.client_lot.lot_id))
+            lot_row = await db.execute(select(Lot.block, Lot.lot_number).where(Lot.id == t.client_lot.lot_id))
             lot_data = lot_row.one_or_none()
             if lot_data:
                 lot_identifier = f"Qd {lot_data[0]} Lt {lot_data[1]}"
@@ -143,7 +143,7 @@ async def get_transfer(
     to_name = t.to_client.full_name if t.to_client else None
     lot_identifier = None
     if t.client_lot:
-        lot_row = await db.execute(select(Lot.block, Lot.number).where(Lot.id == t.client_lot.lot_id))
+        lot_row = await db.execute(select(Lot.block, Lot.lot_number).where(Lot.id == t.client_lot.lot_id))
         lot_data = lot_row.one_or_none()
         if lot_data:
             lot_identifier = f"Qd {lot_data[0]} Lt {lot_data[1]}"

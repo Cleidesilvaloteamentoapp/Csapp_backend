@@ -2,6 +2,7 @@
 """Celery tasks for notifications (email + WhatsApp)."""
 
 from datetime import date, timedelta
+from decimal import Decimal
 
 from app.tasks._async_helpers import TaskSessionFactory, run_in_task_loop
 from app.tasks.celery_app import celery
@@ -467,16 +468,35 @@ def overdue_escalation(self):
 # Cycle completion notification
 # ---------------------------------------------------------------------------
 
+# How many days before the cycle's last due date the renewal is raised. The
+# admin needs lead time to review the index and release the next 12 boletos
+# before billing runs dry; waiting for full settlement left no runway at all.
+CYCLE_LEAD_DAYS = 45
+
+
 async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
-    """Create CycleApproval records when a 12-installment cycle completes."""
-    from sqlalchemy import select, func
-    from app.models.boleto import Boleto
+    """Raise CycleApproval records ahead of each 12-installment cycle's end.
+
+    The approval is raised on schedule, not on settlement: a single unpaid
+    installment used to hide the renewal entirely. Settlement is recorded on the
+    approval instead (`unpaid_count` / `overdue_amount`), where it gates the
+    Approve button and can be overridden deliberately.
+    """
+    from sqlalchemy import func, select
     from app.models.client_lot import ClientLot
     from app.models.cycle_approval import CycleApproval
-    from app.models.enums import BoletoStatus, ClientLotStatus, CycleApprovalStatus, InvoiceStatus, NotificationType
+    from app.models.enums import (
+        ClientLotStatus,
+        CycleApprovalStatus,
+        InvoiceStatus,
+        NotificationType,
+    )
     from app.models.invoice import Invoice
     from app.services.admin_notify_service import notify_admins
+    from app.services.client_lot_service import get_boleto_liquidated_invoice_ids
     from app.services.email_service import send_admin_alert
+
+    today = date.today()
 
     async with session_factory() as db:
         rows = await db.execute(
@@ -484,35 +504,59 @@ async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
         )
         active_lots = rows.scalars().all()
         created = 0
+        completed = 0
 
         for cl in active_lots:
             cycle_size = 12
-            cycle_start = (cl.current_cycle - 1) * cycle_size + 1
+            cycle_start = (cl.current_cycle - 1) * cycle_size
             cycle_end = cl.current_cycle * cycle_size
+            total = cl.total_installments or 1
 
-            # Count installments in the cycle settled via a LIQUIDADO boleto.
-            # Renewal does not recognize payments made by other means.
-            paid_q = await db.execute(
-                select(func.count(func.distinct(Invoice.id)))
-                .join(Boleto, Boleto.invoice_id == Invoice.id)
-                .where(
+            cycle_rows = await db.execute(
+                select(Invoice).where(
                     Invoice.client_lot_id == cl.id,
-                    Invoice.installment_number >= cycle_start,
+                    Invoice.installment_number > cycle_start,
                     Invoice.installment_number <= cycle_end,
-                    Invoice.status == InvoiceStatus.PAID,
-                    Boleto.status == BoletoStatus.LIQUIDADO,
+                    Invoice.status != InvoiceStatus.CANCELLED,
                 )
             )
-            paid_count = paid_q.scalar() or 0
-
-            if paid_count < cycle_size:
+            cycle_invoices = list(cycle_rows.scalars().all())
+            if not cycle_invoices:
                 continue
 
-            total = cl.total_installments or 1
-            if cycle_end >= total:
-                continue  # All installments done, no next cycle needed
+            last_due = max(inv.due_date for inv in cycle_invoices)
 
-            # Check if approval already exists for next cycle
+            # The contract ends with this cycle: nothing left to renew, but the
+            # deed still has to be drawn up once it is settled.
+            highest = (await db.execute(
+                select(func.max(Invoice.installment_number)).where(
+                    Invoice.client_lot_id == cl.id
+                )
+            )).scalar() or 0
+            if highest >= total:
+                liquidated_ids = await get_boleto_liquidated_invoice_ids(db, cl.id)
+                all_rows = await db.execute(
+                    select(Invoice).where(
+                        Invoice.client_lot_id == cl.id,
+                        Invoice.status != InvoiceStatus.CANCELLED,
+                    )
+                )
+                all_invoices = list(all_rows.scalars().all())
+                fully_settled = all_invoices and all(
+                    inv.status == InvoiceStatus.PAID and inv.id in liquidated_ids
+                    for inv in all_invoices
+                )
+                if fully_settled and cl.status != ClientLotStatus.COMPLETED:
+                    cl.status = ClientLotStatus.COMPLETED
+                    completed += 1
+                    await _ensure_deed_checklist(db, cl)
+                    await _alert_escrituracao(db, cl, reason="contrato quitado")
+                continue
+
+            # Lead time: raise the renewal before the cycle's last due date.
+            if today < last_due - timedelta(days=CYCLE_LEAD_DAYS):
+                continue
+
             next_cycle = cl.current_cycle + 1
             existing = await db.execute(
                 select(CycleApproval).where(
@@ -523,27 +567,58 @@ async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
             if existing.scalar_one_or_none():
                 continue
 
-            # Create pending approval
+            # Settlement snapshot: only boleto-liquidated installments count.
+            liquidated_ids = await get_boleto_liquidated_invoice_ids(db, cl.id)
+            unpaid = [
+                inv for inv in cycle_invoices
+                if inv.status != InvoiceStatus.PAID or inv.id not in liquidated_ids
+            ]
+            overdue_amount = sum(
+                (inv.amount for inv in unpaid if inv.due_date < today),
+                Decimal("0"),
+            )
+
+            remaining_after = total - highest
+            is_final = 0 < remaining_after <= cycle_size
+
             approval = CycleApproval(
                 company_id=cl.company_id,
                 client_lot_id=cl.id,
                 cycle_number=next_cycle,
                 status=CycleApprovalStatus.PENDING,
-                previous_installment_value=cl.current_installment_value or (cl.total_value / total),
+                previous_installment_value=cl.current_installment_value
+                or (cl.total_value / total),
+                unpaid_count=len(unpaid),
+                overdue_amount=overdue_amount,
+                is_final_cycle=is_final,
             )
             db.add(approval)
             created += 1
 
-            # Send admin alert (email + in-app + WhatsApp)
+            if is_final:
+                await _ensure_deed_checklist(db, cl)
+
+            settled = len(cycle_invoices) - len(unpaid)
             alert_msg = (
-                f"O ciclo {cl.current_cycle} do contrato (lote ID: {cl.id}) foi concluído. "
-                f"Uma solicitação de aprovação para o ciclo {next_cycle} foi criada. "
-                f"Valor atual da parcela: R${cl.current_installment_value}."
+                f"O ciclo {cl.current_cycle} do contrato (lote ID: {cl.id}) vence em "
+                f"{last_due.strftime('%d/%m/%Y')}. Uma solicitação de aprovação para o "
+                f"ciclo {next_cycle} foi criada. "
+                f"Quitação: {settled} de {len(cycle_invoices)} parcelas liquidadas"
+                + (f", {len(unpaid)} em aberto." if unpaid else ".")
+                + f" Valor atual da parcela: R${cl.current_installment_value}."
             )
+            if is_final:
+                alert_msg += (
+                    " ATENÇÃO: este é o último ciclo do contrato — inicie a escrituração."
+                )
+
             try:
                 await send_admin_alert(
                     company_id=str(cl.company_id),
-                    subject=f"Ciclo {cl.current_cycle} concluído — aprovação pendente",
+                    subject=(
+                        f"Ciclo {next_cycle} aguardando aprovação"
+                        + (" — ÚLTIMO CICLO" if is_final else "")
+                    ),
                     message=alert_msg,
                     db=db,
                 )
@@ -554,16 +629,73 @@ async def _notify_cycle_completion_async(session_factory: TaskSessionFactory):
                     db,
                     cl.company_id,
                     "notify_admin_cycle_request",
-                    title=f"Ciclo {cl.current_cycle} concluído",
+                    title=(
+                        f"Ciclo {next_cycle} aguardando aprovação"
+                        + (" — ÚLTIMO CICLO" if is_final else "")
+                    ),
                     message=alert_msg,
                     n_type=NotificationType.CICLO_PENDENTE,
-                    data={"client_lot_id": str(cl.id), "cycle_number": next_cycle},
+                    data={
+                        "client_lot_id": str(cl.id),
+                        "cycle_number": next_cycle,
+                        "unpaid_count": len(unpaid),
+                        "is_final_cycle": is_final,
+                    },
+                    staff_permission="manage_financial",
                 )
             except Exception as exc:
                 logger.warning("cycle_completion_alert_failed", cl_id=str(cl.id), error=str(exc))
 
         await db.commit()
-        logger.info("cycle_completion_check", approvals_created=created)
+        logger.info(
+            "cycle_completion_check",
+            approvals_created=created,
+            contracts_completed=completed,
+        )
+
+
+async def _ensure_deed_checklist(db, client_lot) -> None:
+    """Create the escrituração checklist for a contract, once."""
+    from sqlalchemy import select
+    from app.models.deed_checklist import DeedChecklist, default_items
+
+    existing = await db.execute(
+        select(DeedChecklist).where(DeedChecklist.client_lot_id == client_lot.id)
+    )
+    if existing.scalar_one_or_none():
+        return
+    db.add(
+        DeedChecklist(
+            company_id=client_lot.company_id,
+            client_lot_id=client_lot.id,
+            items=default_items(),
+        )
+    )
+
+
+async def _alert_escrituracao(db, client_lot, *, reason: str) -> None:
+    """Tell the admins a contract is ready for deed transfer."""
+    from app.models.enums import NotificationType
+    from app.services.admin_notify_service import notify_admins
+
+    try:
+        await notify_admins(
+            db,
+            client_lot.company_id,
+            "notify_admin_cycle_request",
+            title="Escrituração pendente",
+            message=(
+                f"O contrato (lote ID: {client_lot.id}) chegou ao fim ({reason}). "
+                "Inicie a escrituração: o checklist de documentos já está disponível."
+            ),
+            n_type=NotificationType.ESCRITURACAO_PENDENTE,
+            data={"client_lot_id": str(client_lot.id), "action": "deed_checklist"},
+            staff_permission="manage_financial",
+        )
+    except Exception as exc:
+        logger.warning(
+            "escrituracao_alert_failed", cl_id=str(client_lot.id), error=str(exc)
+        )
 
 
 @celery.task(bind=True, max_retries=3, default_retry_delay=300)

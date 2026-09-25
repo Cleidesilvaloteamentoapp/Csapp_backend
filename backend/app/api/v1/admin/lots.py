@@ -27,7 +27,7 @@ from app.models.lot import Lot
 from app.models.user import Profile
 from app.schemas.common import PaginatedResponse
 from app.services import client_lot_service
-from app.services.client_lot_service import get_remaining_installments, should_generate_next_batch
+from app.services.client_lot_service import get_remaining_installments
 from app.services.financial_defaults_service import get_all_effective_rates
 from app.services.pricing_service import compute_plan
 from app.services.storage_service import delete_file, enrich_photos, upload_file
@@ -1114,87 +1114,28 @@ async def update_client_lot_financial_rules(
     return ClientLotResponse.model_validate(cl)
 
 
-@router.post("/client-lots/{client_lot_id}/generate-next-batch")
+@router.post("/client-lots/{client_lot_id}/generate-next-batch", deprecated=True)
 async def generate_next_batch(
     client_lot_id: UUID,
-    adjustment_rate: float = Query(..., ge=0, le=1, description="Adjustment rate (e.g., 0.05 for 5%)"),
+    adjustment_rate: float = Query(..., ge=0, le=1, description="Ignored; kept for compatibility"),
     db: AsyncSession = Depends(get_db),
     admin: Profile = Depends(require_permission("manage_financial")),
 ):
-    """Generate next batch of 12 installments with adjustment.
+    """Retired: renewal now goes through the cycle-approval flow.
 
-    This endpoint is called when a cycle is complete and the admin wants
-    to generate the next 12 boletos with an annual adjustment applied.
-
-    The client lot's current_cycle will be incremented and the
-    current_installment_value will be updated with the adjustment.
+    This endpoint used to bump `current_cycle` and reprice the contract on the
+    spot while generating no invoices, no boletos and no audit trail -- a silent
+    third path around the approval the admin was supposed to give. Renewal is
+    now opened with POST /admin/cycle-approvals/request and released with
+    /approve (or /force-approve when installments are still open).
     """
-    # Verify client lot exists
-    result = await db.execute(
-        select(ClientLot).where(
-            ClientLot.id == client_lot_id,
-            ClientLot.company_id == admin.company_id,
-        )
-    )
-    cl = result.scalar_one_or_none()
-    if not cl:
-        raise HTTPException(status_code=404, detail="Client lot not found")
-
-    # Check if ready for next batch
-    should_gen, reason = await should_generate_next_batch(db, client_lot_id)
-    if not should_gen:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Not ready for next batch: {reason}",
-        )
-
-    # Get installment info
-    info = await get_remaining_installments(db, client_lot_id)
-    if not info:
-        raise HTTPException(status_code=404, detail="Could not calculate installment info")
-
-    # Calculate new value with adjustment.
-    # The fallback must subtract down_payment so the parcel reflects the
-    # financed amount, not the total contract value.
-    current_value = cl.current_installment_value
-    if not current_value:
-        total_installments = cl.total_installments or 1
-        financed = cl.total_value - (cl.down_payment or Decimal("0"))
-        current_value = financed / total_installments
-
-    new_value = current_value * Decimal(str(1 + adjustment_rate))
-    new_value = new_value.quantize(Decimal("0.01"))
-
-    # Update client lot
-    cl.current_cycle += 1
-    cl.current_installment_value = new_value
-    cl.last_adjustment_date = date.today()
-
-    await db.commit()
-
-    logger.info(
-        "generate_next_batch",
-        client_lot_id=str(client_lot_id),
-        admin_id=str(admin.id),
-        new_cycle=cl.current_cycle,
-        previous_value=float(current_value),
-        new_value=float(new_value),
-        adjustment_rate=adjustment_rate,
-    )
-
-    return {
-        "status": "ready_for_batch",
-        "client_lot_id": str(client_lot_id),
-        "current_cycle": cl.current_cycle,
-        "previous_installment_value": float(current_value),
-        "new_installment_value": float(new_value),
-        "adjustment_rate": adjustment_rate,
-        "remaining_installments": info.remaining_installments,
-        "message": (
-            f"Ciclo {cl.current_cycle} preparado. Valor atualizado para R$ {new_value}. "
-            f"Use o endpoint de criação de lotes para gerar os 12 boletos."
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Endpoint descontinuado. Use POST /admin/cycle-approvals/request para "
+            "abrir a renovação e /approve ou /force-approve para liberar o ciclo."
         ),
-    }
+    )
 
 
 @router.get("/client-lots/{client_lot_id}/installments")

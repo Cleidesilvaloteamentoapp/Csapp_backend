@@ -7,7 +7,17 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Integer, Numeric, Text, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -59,6 +69,36 @@ class CycleApproval(Base, TenantMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True,
     )
     admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Settlement snapshot taken when the approval is raised. The panel shows the
+    # renewal ahead of the cycle's last due date, so it has to say how much of
+    # the cycle is actually settled -- that is what gates the Approve button.
+    unpaid_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+        comment="Installments of the closing cycle not settled via a LIQUIDADO boleto",
+    )
+    overdue_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), nullable=False, default=Decimal("0"), server_default=text("0"),
+    )
+    is_final_cycle: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+        comment="Last cycle of the contract; starts the escrituração checklist",
+    )
+
+    # Forced renewal: an admin releasing the next cycle despite open installments.
+    forced: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
+    forced_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    forced_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "client_lot_id", "cycle_number", name="uq_cycle_approvals_lot_cycle"
+        ),
+    )
 
     # Relationships
     client_lot = relationship("ClientLot", lazy="selectin")
